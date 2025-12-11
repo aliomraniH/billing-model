@@ -3,9 +3,9 @@
 Database Connection Verification Script
 Run this script to verify your Vercel Postgres connection is properly configured.
 
-Usage in Google Colab:
-    1. Add VERCEL_POSTGRES_URL to Colab Secrets (🔑 sidebar)
-    2. Copy-paste this entire script into a Colab cell
+Usage in Deepnote:
+    1. Add VERCEL_POSTGRES_URL to Project Settings → Environment Variables
+    2. Copy-paste this entire script into a Deepnote notebook cell
     3. Run the cell
 
 Usage locally:
@@ -28,41 +28,25 @@ except ImportError:
     from sqlalchemy import create_engine, text
     import pandas as pd
 
-# Detect environment (Colab vs local)
-try:
-    from google.colab import userdata
-    IN_COLAB = True
-    print("🔍 Running in Google Colab")
-except ImportError:
-    IN_COLAB = False
+# Detect environment (Deepnote vs local)
+IN_DEEPNOTE = os.path.exists('/datasets') or 'DEEPNOTE_PROJECT_ID' in os.environ
+
+if IN_DEEPNOTE:
+    print("🔍 Running in Deepnote")
+else:
     print("🔍 Running locally")
 
 
 def get_database_url():
     """Get database URL from environment"""
-    if IN_COLAB:
-        try:
-            url = userdata.get('VERCEL_POSTGRES_URL')
-            if not url:
-                print("❌ ERROR: VERCEL_POSTGRES_URL not found in Colab secrets!")
-                print("\n📝 To fix:")
-                print("1. Click 🔑 Secrets icon in left sidebar")
-                print("2. Click '+ Add new secret'")
-                print("3. Name: VERCEL_POSTGRES_URL")
-                print("4. Value: postgresql://...")
-                print("5. Toggle 'Notebook access' ON")
-                sys.exit(1)
-            return url
-        except Exception as e:
-            print(f"❌ ERROR reading Colab secrets: {e}")
-            sys.exit(1)
-    else:
-        # Try environment variable first
-        url = os.getenv('VERCEL_POSTGRES_URL')
-        if url:
-            return url
+    # Try environment variable first (works in Deepnote and local)
+    url = os.getenv('VERCEL_POSTGRES_URL')
 
-        # Try loading from .env file
+    if url:
+        return url
+
+    # Try loading from .env file (local development)
+    if not IN_DEEPNOTE:
         try:
             from dotenv import load_dotenv
             load_dotenv()
@@ -73,12 +57,28 @@ def get_database_url():
             print("💡 TIP: Install python-dotenv to load from .env file")
             print("   pip install python-dotenv")
 
-        print("❌ ERROR: VERCEL_POSTGRES_URL not found!")
-        print("\n📝 To fix:")
+    # Error: no credentials found
+    print("❌ ERROR: VERCEL_POSTGRES_URL not found!")
+
+    if IN_DEEPNOTE:
+        print("\n📝 To fix in Deepnote:")
+        print("1. Click gear icon (⚙️) at top right")
+        print("2. Select 'Environment variables'")
+        print("3. Click '+ Add variable'")
+        print("4. Enter:")
+        print("   - Name: VERCEL_POSTGRES_URL")
+        print("   - Value: postgresql://user:pass@host:5432/db?sslmode=require")
+        print("   - Scope: Project")
+        print("5. Click 'Create'")
+        print("6. Restart your notebook kernel")
+    else:
+        print("\n📝 To fix locally:")
         print("1. Copy .env.example to .env")
         print("2. Fill in your VERCEL_POSTGRES_URL")
-        print("3. Or set environment variable: export VERCEL_POSTGRES_URL='postgresql://...'")
-        sys.exit(1)
+        print("3. Or set environment variable:")
+        print("   export VERCEL_POSTGRES_URL='postgresql://...'")
+
+    sys.exit(1)
 
 
 def verify_connection():

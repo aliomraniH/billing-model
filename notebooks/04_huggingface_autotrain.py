@@ -1,23 +1,25 @@
 # Medical Billing ML - Notebook 4: Hugging Face AutoTrain Workflow
 # Prerequisites: Run notebooks 01-03 first
 
-#@title 1️⃣ Install & Setup Hugging Face
+1️⃣ Install & Setup Hugging Face
 !pip install -q autotrain-advanced
-from google.colab import userdata
+from Deepnote environment import userdata
 from sqlalchemy import create_engine
 from huggingface_hub import login, HfApi
 from datasets import Dataset, DatasetDict
 from sklearn.model_selection import train_test_split
 import pandas as pd
 
-HF_TOKEN = userdata.get('HF_TOKEN')
+HF_TOKEN = os.getenv('HF_TOKEN')
+if not HF_TOKEN:
+    raise ValueError("HF_TOKEN not found! Add it to Project Settings → Environment Variables")
 login(token=HF_TOKEN)
 print("✅ Logged in to Hugging Face!")
 
-DATABASE_URL = userdata.get('VERCEL_POSTGRES_URL')
+DATABASE_URL = os.getenv('VERCEL_POSTGRES_URL')
 engine = create_engine(DATABASE_URL)
 
-#@title 2️⃣ Prepare & Upload Dataset
+2️⃣ Prepare & Upload Dataset
 training_query = """
 SELECT total_charge, total_paid,
        CASE WHEN total_charge > 0 THEN total_paid / total_charge ELSE 0 END as payment_ratio,
@@ -41,7 +43,7 @@ DATASET_NAME = f"{HF_USERNAME}/medical-billing-outliers"
 dataset_dict.push_to_hub(DATASET_NAME, private=True)
 print(f"✅ Dataset uploaded to: https://huggingface.co/datasets/{DATASET_NAME}")
 
-#@title 3️⃣ Train XGBoost Locally (Quick)
+3️⃣ Train XGBoost Locally (Quick)
 import xgboost as xgb
 from sklearn.metrics import classification_report, roc_auc_score
 
@@ -63,10 +65,10 @@ print("\n📊 MODEL EVALUATION")
 print(classification_report(y_test, y_pred, target_names=['Normal', 'Outlier']))
 print(f"ROC-AUC: {roc_auc_score(y_test, y_prob):.4f}")
 
-#@title 4️⃣ Upload Model to Hub
+4️⃣ Upload Model to Hub
 import os, json
 
-model_dir = '/content/medical_outlier_model'
+model_dir = '/work/medical_outlier_model'
 os.makedirs(model_dir, exist_ok=True)
 xgb_model.save_model(f'{model_dir}/model.json')
 

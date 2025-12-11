@@ -3,13 +3,13 @@
 > Browser-based machine learning system for medical billing analysis using managed services
 
 [![Budget](https://img.shields.io/badge/Budget-Under%20$50%2Fmonth-green)]()
-[![Platform](https://img.shields.io/badge/Platform-Google%20Colab-orange)]()
-[![Database](https://img.shields.io/badge/Database-Vercel%20Postgres-blue)]()
+[![Platform](https://img.shields.io/badge/Platform-Deepnote-blue)]()
+[![Database](https://img.shields.io/badge/Database-Vercel%20Postgres-blueviolet)]()
 [![ML](https://img.shields.io/badge/ML-Hugging%20Face-yellow)]()
 
 ## Overview
 
-An experimental ML system for detecting billing anomalies, validating clinical claims, and suggesting appropriate medical codes from clinical documentation. All development happens in browser-based environments (Google Colab) with managed services only.
+An experimental ML system for detecting billing anomalies, validating clinical claims, and suggesting appropriate medical codes from clinical documentation. All development happens in browser-based environments (Deepnote) with managed services only.
 
 ### Primary Objectives
 
@@ -22,14 +22,14 @@ An experimental ML system for detecting billing anomalies, validating clinical c
 - ✅ Working pipeline: Database → Model Training → Predictions stored back
 - ✅ Semantic similarity search between clinical notes and billing codes
 - ✅ Models trained via Hugging Face AutoTrain
-- ✅ All code runnable via copy-paste in Google Colab
+- ✅ All code runnable in Deepnote notebooks
 
 ## Architecture
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│ Vercel Postgres │◄──►│  Google Colab    │───►│ Hugging Face    │
-│ + pgvector      │    │  Pro Notebook    │    │ AutoTrain       │
+│ Vercel Postgres │◄──►│    Deepnote      │───►│ Hugging Face    │
+│ + pgvector      │    │   Notebook       │    │ AutoTrain       │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
         ▲                       │                      │
         └───────────────────────┴──────────────────────┘
@@ -42,19 +42,19 @@ An experimental ML system for detecting billing anomalies, validating clinical c
 |-----------|------|------|-----|
 | **Database** | Vercel Postgres (Neon) | Free | Managed serverless Postgres with pgvector 0.8.0 built-in |
 | **Vector Store** | pgvector | Free | Single DB for relational + embeddings (up to 2000 dimensions) |
-| **Development** | Google Colab Pro | $9.99/mo | T4/V100 GPU access, 24-hour sessions |
+| **Development** | Deepnote | Free-$49/mo | Collaborative notebooks, GPU access, persistent storage |
 | **AutoML** | Hugging Face AutoTrain | $15-25/mo | No-code tabular + NLP, pay-per-use compute |
 | **Clinical NLP** | medspaCy + scispaCy | Free | Negation detection, UMLS entity linking |
 | **Training Data** | Synthea / MIMIC-IV | Free | Synthea: synthetic; MIMIC-IV: real (credentialed) |
 
-**Total Monthly Cost:** $35-45
+**Total Monthly Cost:** $15-75 (Free tier available, Team plan recommended for GPU)
 
 ## Project Structure
 
 ```
 billing-model/
 ├── README.md                          # This file
-├── notebooks/                         # Google Colab notebooks (copy-paste ready)
+├── notebooks/                         # Deepnote-ready Python notebooks
 │   ├── 01_setup_database.py          # Database connection & schema setup
 │   ├── 02_load_synthea_data.py       # Load synthetic training data
 │   ├── 03_outlier_detection.py       # Train Isolation Forest model
@@ -83,9 +83,10 @@ billing-model/
    - Create account at [huggingface.co](https://huggingface.co)
    - Generate access token with **write** permissions
 
-3. **Google Colab Pro** (recommended)
-   - Subscribe at [colab.research.google.com](https://colab.research.google.com)
-   - $9.99/month for GPU access
+3. **Deepnote Account**
+   - Sign up at [deepnote.com](https://deepnote.com)
+   - Free tier available (sufficient for prototyping)
+   - Team plan ($24/user/mo) recommended for GPU access
 
 ### Setup Instructions
 
@@ -93,10 +94,12 @@ billing-model/
 
 1. **Configure Environment**
 
-   **In Google Colab** (Recommended):
-   - Add secrets via 🔑 sidebar:
+   **In Deepnote** (Recommended):
+   - Navigate to **Project Settings** → **Environment Variables**
+   - Add environment variables:
      - `VERCEL_POSTGRES_URL` = `postgresql://user:pass@host:5432/db?sslmode=require`
      - `HF_TOKEN` = `hf_xxxxxxxxxxxxxxxxxxxxx`
+   - Variables are automatically available via `os.getenv()`
 
    **For Local Development**:
    ```bash
@@ -106,7 +109,7 @@ billing-model/
 
 2. **Verify Connection**
    ```python
-   # Run in Colab: scripts/verify_connection.py
+   # Run in Deepnote: scripts/verify_connection.py
    # This will check database connectivity and pgvector support
    ```
 
@@ -159,7 +162,7 @@ See [`sql/schema.sql`](sql/schema.sql) for full definitions.
 ### ✅ Week 1: Infrastructure & Connectivity
 - [x] Architecture decisions documented
 - [ ] Create Vercel Postgres database
-- [ ] Test connection from Colab
+- [ ] Test connection from Deepnote
 - [ ] Enable pgvector extension
 - [ ] Create schema tables
 

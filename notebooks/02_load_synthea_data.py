@@ -1,25 +1,27 @@
 # Medical Billing ML - Notebook 2: Load Synthea Data
 # Prerequisites: Run notebook 01 first to create database schema
 
-#@title 1️⃣ Download Synthea Sample Data
-!mkdir -p /content/synthea_data
-!wget -q -O /content/synthea_data/synthea_sample.zip \
+1️⃣ Download Synthea Sample Data
+!mkdir -p /work/synthea_data
+!wget -q -O /work/synthea_data/synthea_sample.zip \
     "https://synthetichealth.github.io/synthea-sample-data/downloads/synthea_sample_data_csv_apr2020.zip"
-!unzip -q -o /content/synthea_data/synthea_sample.zip -d /content/synthea_data/
+!unzip -q -o /work/synthea_data/synthea_sample.zip -d /work/synthea_data/
 
 print("✅ Synthea data downloaded!")
-!ls /content/synthea_data/csv/
+!ls /work/synthea_data/csv/
 
-#@title 2️⃣ Connect to Database
-from google.colab import userdata
+2️⃣ Connect to Database
+from Deepnote environment import userdata
 from sqlalchemy import create_engine, text
 import pandas as pd
 
-DATABASE_URL = userdata.get('VERCEL_POSTGRES_URL')
+DATABASE_URL = os.getenv('VERCEL_POSTGRES_URL')
+if not DATABASE_URL:
+    raise ValueError("VERCEL_POSTGRES_URL not found! Add it to Project Settings → Environment Variables")
 engine = create_engine(DATABASE_URL)
 
-#@title 3️⃣ Load Claims Data
-encounters_df = pd.read_csv('/content/synthea_data/csv/encounters.csv')
+3️⃣ Load Claims Data
+encounters_df = pd.read_csv('/work/synthea_data/csv/encounters.csv')
 
 claims_data = pd.DataFrame({
     'patient_id': encounters_df['PATIENT'].apply(lambda x: hash(x) % 10**9),
@@ -37,8 +39,8 @@ claims_data = pd.DataFrame({
 claims_data.head(5000).to_sql('claims', engine, if_exists='append', index=False, method='multi', chunksize=500)
 print(f"✅ Loaded {min(5000, len(claims_data))} claims!")
 
-#@title 4️⃣ Load Diagnoses (Conditions)
-conditions_df = pd.read_csv('/content/synthea_data/csv/conditions.csv')
+4️⃣ Load Diagnoses (Conditions)
+conditions_df = pd.read_csv('/work/synthea_data/csv/conditions.csv')
 
 with engine.connect() as conn:
     result = conn.execute(text("SELECT claim_id, patient_id, service_date FROM claims"))
@@ -61,7 +63,7 @@ diagnoses_data = pd.DataFrame({
 diagnoses_data.head(10000).to_sql('diagnoses', engine, if_exists='append', index=False, method='multi', chunksize=500)
 print(f"✅ Loaded {min(10000, len(diagnoses_data))} diagnoses!")
 
-#@title 5️⃣ Verify Data Load
+5️⃣ Verify Data Load
 summary = pd.read_sql("""
     SELECT
         (SELECT COUNT(*) FROM claims) as total_claims,

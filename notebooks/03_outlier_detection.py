@@ -1,8 +1,8 @@
 # Medical Billing ML - Notebook 3: Outlier Detection Model
 # Prerequisites: Run notebooks 01 and 02 first
 
-#@title 1️⃣ Connect to Database
-from google.colab import userdata
+1️⃣ Connect to Database
+from Deepnote environment import userdata
 from sqlalchemy import create_engine, text
 import pandas as pd
 import numpy as np
@@ -11,10 +11,12 @@ from sklearn.preprocessing import StandardScaler
 import warnings
 warnings.filterwarnings('ignore')
 
-DATABASE_URL = userdata.get('VERCEL_POSTGRES_URL')
+DATABASE_URL = os.getenv('VERCEL_POSTGRES_URL')
+if not DATABASE_URL:
+    raise ValueError("VERCEL_POSTGRES_URL not found! Add it to Project Settings → Environment Variables")
 engine = create_engine(DATABASE_URL)
 
-#@title 2️⃣ Prepare Features
+2️⃣ Prepare Features
 feature_query = """
 WITH claim_features AS (
     SELECT
@@ -33,7 +35,7 @@ SELECT * FROM claim_features WHERE total_charge > 0
 df = pd.read_sql(feature_query, engine)
 print(f"✅ Loaded {len(df):,} claims with features")
 
-#@title 3️⃣ Feature Engineering & Training
+3️⃣ Feature Engineering & Training
 df['charge_per_diagnosis'] = df['total_charge'] / (df['num_diagnoses'] + 1)
 df['charge_per_procedure'] = df['total_charge'] / (df['num_procedures'] + 1)
 
@@ -53,7 +55,7 @@ df['outlier_score'] = -model.decision_function(X_scaled)
 print(f"\n🔍 OUTLIER DETECTION RESULTS")
 print(f"Outliers Found: {df['is_outlier'].sum():,} ({df['is_outlier'].mean()*100:.1f}%)")
 
-#@title 4️⃣ Write Predictions to Database
+4️⃣ Write Predictions to Database
 with engine.connect() as conn:
     for _, row in df.iterrows():
         conn.execute(text("""
@@ -65,15 +67,15 @@ with engine.connect() as conn:
 
 print(f"✅ Updated {len(df):,} claims with outlier predictions!")
 
-#@title 5️⃣ Analyze Top Outliers
+5️⃣ Analyze Top Outliers
 print("\n🚨 TOP 10 OUTLIERS")
 top_outliers = df[df['is_outlier']].nlargest(10, 'outlier_score')[
     ['claim_id', 'total_charge', 'num_diagnoses', 'num_procedures', 'outlier_score']]
 print(top_outliers.to_string(index=False))
 
-#@title 6️⃣ Save Model
+6️⃣ Save Model
 import pickle
 model_artifacts = {'model': model, 'scaler': scaler, 'feature_cols': feature_cols}
-with open('/content/outlier_model.pkl', 'wb') as f:
+with open('/work/outlier_model.pkl', 'wb') as f:
     pickle.dump(model_artifacts, f)
-print("\n✅ Model saved to /content/outlier_model.pkl")
+print("\n✅ Model saved to /work/outlier_model.pkl")
