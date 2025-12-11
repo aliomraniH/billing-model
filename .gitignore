@@ -1,0 +1,97 @@
+# Medical Billing ML - Git Ignore
+
+# Data files (large datasets, local caches)
+data/
+*.csv
+*.parquet
+*.feather
+*.hdf5
+*.h5
+
+# Model files (large binary files)
+*.pkl
+*.joblib
+*.pt
+*.pth
+*.onnx
+*.pb
+models/
+checkpoints/
+
+# Credentials and secrets
+.env
+.env.local
+credentials.json
+secrets.json
+config.local.json
+
+# Database connection strings
+database_url.txt
+connection_string.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# Documentation builds
+docs/_build/
+site/
