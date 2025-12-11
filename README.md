@@ -77,6 +77,7 @@ billing-model/
    - Create free account at [vercel.com](https://vercel.com)
    - Create Postgres database (Neon)
    - Copy direct connection string (NOT pooled)
+   - 📖 **Detailed Guide:** [docs/VERCEL_SETUP.md](docs/VERCEL_SETUP.md)
 
 2. **Hugging Face Account**
    - Create account at [huggingface.co](https://huggingface.co)
@@ -88,23 +89,40 @@ billing-model/
 
 ### Setup Instructions
 
-1. **Configure Colab Secrets** (🔑 sidebar in Colab)
-   ```
-   VERCEL_POSTGRES_URL = postgresql://user:pass@host/db
-   HF_TOKEN = hf_xxxxxxxxxxxxxxxxxxxxx
+**📋 Full Checklist:** See [SETUP_CHECKLIST.md](SETUP_CHECKLIST.md) for detailed step-by-step instructions
+
+1. **Configure Environment**
+
+   **In Google Colab** (Recommended):
+   - Add secrets via 🔑 sidebar:
+     - `VERCEL_POSTGRES_URL` = `postgresql://user:pass@host:5432/db?sslmode=require`
+     - `HF_TOKEN` = `hf_xxxxxxxxxxxxxxxxxxxxx`
+
+   **For Local Development**:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your credentials
    ```
 
-2. **Run Notebooks in Order**
+2. **Verify Connection**
+   ```python
+   # Run in Colab: scripts/verify_connection.py
+   # This will check database connectivity and pgvector support
+   ```
+
+3. **Run Notebooks in Order**
    - `01_setup_database.py` - Creates tables, enables pgvector
    - `02_load_synthea_data.py` - Downloads & loads synthetic claims
    - `03_outlier_detection.py` - Trains Isolation Forest, writes predictions
    - `04_huggingface_autotrain.py` - XGBoost classifier + HF upload
    - `05_embeddings_search.py` - Embedding generation + similarity search
 
-3. **Verify Pipeline**
+4. **Verify Pipeline**
    - Check predictions table for outlier scores
    - Test similarity search with sample queries
    - Review model metrics in Hugging Face
+
+**⏱️ Estimated Setup Time:** 2-3 hours (including account creation)
 
 ## Data Sources
 
