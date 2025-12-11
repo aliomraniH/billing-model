@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS claims (
 CREATE TABLE IF NOT EXISTS diagnoses (
     diagnosis_id BIGSERIAL PRIMARY KEY,
     claim_id BIGINT REFERENCES claims(claim_id) ON DELETE CASCADE,
-    icd_code VARCHAR(10) NOT NULL,
+    icd_code VARCHAR(50) NOT NULL,
     icd_version INTEGER DEFAULT 10,
     is_primary BOOLEAN DEFAULT FALSE,
     sequence_num INTEGER
