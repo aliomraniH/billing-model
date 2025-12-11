@@ -3,8 +3,7 @@
 
 # Download Synthea Sample Data
 !mkdir -p /work/synthea_data
-!wget -q -O /work/synthea_data/synthea_sample.zip \
-    "https://synthetichealth.github.io/synthea-sample-data/downloads/synthea_sample_data_csv_apr2020.zip"
+!wget -q -O /work/synthea_data/synthea_sample.zip "https://synthetichealth.github.io/synthea-sample-data/downloads/synthea_sample_data_csv_apr2020.zip"
 !unzip -q -o /work/synthea_data/synthea_sample.zip -d /work/synthea_data/
 
 print("✅ Synthea data downloaded to /work/synthea_data/")
