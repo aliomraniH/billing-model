@@ -1,26 +1,60 @@
 # Medical Billing ML - Notebook 1: Setup & Connect to Database
-# Copy-paste this entire script into Deepnote and run cells sequentially
+# Run this in Deepnote to set up your database schema
 
-#@title 1️⃣ Install Dependencies (Run Once)
+# Install Dependencies
 !pip install -q psycopg2-binary sqlalchemy pandas numpy scikit-learn sentence-transformers datasets huggingface_hub xgboost
 
 print("✅ Dependencies installed!")
 
-#@title 2️⃣ Connect to Vercel Postgres
+# Connect to Vercel Postgres
 import os
 from sqlalchemy import create_engine, text
 import pandas as pd
 
+# Get database URL from environment variables (set in Project Settings)
 DATABASE_URL = os.getenv('VERCEL_POSTGRES_URL')
+
 if not DATABASE_URL:
-    raise ValueError("VERCEL_POSTGRES_URL not found! Add it to Project Settings → Environment Variables")
+    raise ValueError("""
+    ❌ VERCEL_POSTGRES_URL not found!
+
+    📝 To fix:
+    1. Click ⚙️ (Settings) at top right
+    2. Go to 'Environment variables'
+    3. Click '+ Add variable'
+    4. Name: VERCEL_POSTGRES_URL
+    5. Value: postgresql://user:pass@host:5432/db?sslmode=require
+       ⚠️  Make sure it's DIRECT connection (no -pooler in URL)
+    6. Click 'Create'
+    """)
+
+# Verify it's a direct connection (not pooled)
+if '-pooler' in DATABASE_URL:
+    raise ValueError("""
+    ⚠️  POOLED connection detected! This won't work with pgvector.
+
+    📝 To fix:
+    1. Go to Vercel Dashboard → Your Database → Settings
+    2. Find 'POSTGRES_URL_NON_POOLING' (not POSTGRES_URL)
+    3. Copy that URL (should have :5432, no -pooler)
+    4. Update VERCEL_POSTGRES_URL in Deepnote environment variables
+    """)
+
+# Create engine
 engine = create_engine(DATABASE_URL)
 
-with engine.connect() as conn:
-    result = conn.execute(text("SELECT version();"))
-    print(f"✅ Connected to: {result.fetchone()[0][:50]}...")
+# Test connection
+try:
+    with engine.connect() as connection:
+        result = connection.execute(text("SELECT version()"))
+        version = result.fetchone()[0]
+        print(f"✅ Connection successful!")
+        print(f"📊 Database: {version[:60]}...")
+except Exception as e:
+    print(f"❌ Connection failed: {e}")
+    raise
 
-#@title 3️⃣ Enable pgvector & Create Schema
+# Enable pgvector & Create Schema
 schema_sql = """
 CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -83,6 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_procedures_claim ON procedures(claim_id);
 CREATE INDEX IF NOT EXISTS idx_notes_claim ON clinical_notes(claim_id);
 """
 
+# Execute schema creation
 with engine.connect() as conn:
     for statement in schema_sql.split(';'):
         if statement.strip():
@@ -96,4 +131,6 @@ tables_df = pd.read_sql("""
     SELECT table_name FROM information_schema.tables
     WHERE table_schema = 'public' ORDER BY table_name
 """, engine)
-print("📋 Tables:", ', '.join(tables_df['table_name'].tolist()))
+
+print("📋 Tables created:", ', '.join(tables_df['table_name'].tolist()))
+print(f"📊 Total tables: {len(tables_df)}")
