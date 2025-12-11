@@ -1,7 +1,7 @@
 # Medical Billing ML - Notebook 2: Load Synthea Data
 # Prerequisites: Run notebook 01 first to create database schema
 
-1️⃣ Download Synthea Sample Data
+#@title 1️⃣ Download Synthea Sample Data
 !mkdir -p /work/synthea_data
 !wget -q -O /work/synthea_data/synthea_sample.zip \
     "https://synthetichealth.github.io/synthea-sample-data/downloads/synthea_sample_data_csv_apr2020.zip"
@@ -10,8 +10,8 @@
 print("✅ Synthea data downloaded!")
 !ls /work/synthea_data/csv/
 
-2️⃣ Connect to Database
-from Deepnote environment import userdata
+#@title 2️⃣ Connect to Database
+import os
 from sqlalchemy import create_engine, text
 import pandas as pd
 
@@ -20,7 +20,7 @@ if not DATABASE_URL:
     raise ValueError("VERCEL_POSTGRES_URL not found! Add it to Project Settings → Environment Variables")
 engine = create_engine(DATABASE_URL)
 
-3️⃣ Load Claims Data
+#@title 3️⃣ Load Claims Data
 encounters_df = pd.read_csv('/work/synthea_data/csv/encounters.csv')
 
 claims_data = pd.DataFrame({
@@ -39,7 +39,7 @@ claims_data = pd.DataFrame({
 claims_data.head(5000).to_sql('claims', engine, if_exists='append', index=False, method='multi', chunksize=500)
 print(f"✅ Loaded {min(5000, len(claims_data))} claims!")
 
-4️⃣ Load Diagnoses (Conditions)
+#@title 4️⃣ Load Diagnoses (Conditions)
 conditions_df = pd.read_csv('/work/synthea_data/csv/conditions.csv')
 
 with engine.connect() as conn:
@@ -63,7 +63,7 @@ diagnoses_data = pd.DataFrame({
 diagnoses_data.head(10000).to_sql('diagnoses', engine, if_exists='append', index=False, method='multi', chunksize=500)
 print(f"✅ Loaded {min(10000, len(diagnoses_data))} diagnoses!")
 
-5️⃣ Verify Data Load
+#@title 5️⃣ Verify Data Load
 summary = pd.read_sql("""
     SELECT
         (SELECT COUNT(*) FROM claims) as total_claims,

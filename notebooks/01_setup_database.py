@@ -1,13 +1,13 @@
 # Medical Billing ML - Notebook 1: Setup & Connect to Database
 # Copy-paste this entire script into Deepnote and run cells sequentially
 
-1️⃣ Install Dependencies (Run Once)
+#@title 1️⃣ Install Dependencies (Run Once)
 !pip install -q psycopg2-binary sqlalchemy pandas numpy scikit-learn sentence-transformers datasets huggingface_hub xgboost
 
 print("✅ Dependencies installed!")
 
-2️⃣ Connect to Vercel Postgres
-from Deepnote environment import userdata
+#@title 2️⃣ Connect to Vercel Postgres
+import os
 from sqlalchemy import create_engine, text
 import pandas as pd
 
@@ -20,7 +20,7 @@ with engine.connect() as conn:
     result = conn.execute(text("SELECT version();"))
     print(f"✅ Connected to: {result.fetchone()[0][:50]}...")
 
-3️⃣ Enable pgvector & Create Schema
+#@title 3️⃣ Enable pgvector & Create Schema
 schema_sql = """
 CREATE EXTENSION IF NOT EXISTS vector;
 

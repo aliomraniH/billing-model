@@ -1,8 +1,8 @@
 # Medical Billing ML - Notebook 5: Embeddings & Similarity Search
 # Prerequisites: Run notebooks 01-02 first
 
-1️⃣ Connect & Load Embedding Model
-from Deepnote environment import userdata
+#@title 1️⃣ Connect & Load Embedding Model
+import os
 from sqlalchemy import create_engine, text
 from sentence_transformers import SentenceTransformer
 import pandas as pd
@@ -16,7 +16,7 @@ engine = create_engine(DATABASE_URL)
 embed_model = SentenceTransformer('all-MiniLM-L6-v2')
 print(f"✅ Model loaded (dim={embed_model.get_sentence_embedding_dimension()})")
 
-2️⃣ Create Sample Clinical Notes
+#@title 2️⃣ Create Sample Clinical Notes
 sample_notes = [
     {"note_type": "discharge", "note_text": "Patient admitted with uncontrolled Type 2 diabetes mellitus. Blood glucose stabilized with insulin. HbA1c 9.2%. Discharged on adjusted metformin."},
     {"note_type": "discharge", "note_text": "Acute chest pain with ST elevation in V1-V4. Emergent PCI with drug-eluting stent to LAD. Post-MI protocol initiated."},
@@ -39,7 +39,7 @@ with engine.connect() as conn:
     conn.commit()
 print(f"✅ Stored {len(sample_notes)} clinical notes with embeddings!")
 
-3️⃣ Similarity Search Function
+#@title 3️⃣ Similarity Search Function
 def search_similar_notes(query: str, top_k: int = 5):
     query_embedding = embed_model.encode([query])[0]
     emb_str = '[' + ','.join(map(str, query_embedding)) + ']'
@@ -52,7 +52,7 @@ def search_similar_notes(query: str, top_k: int = 5):
     """), engine, params={'emb': emb_str, 'k': top_k})
     return results
 
-4️⃣ Test Searches
+#@title 4️⃣ Test Searches
 print("🔍 Query: 'diabetes blood sugar insulin'")
 for _, row in search_similar_notes("diabetes blood sugar insulin", 3).iterrows():
     print(f"  [{row['similarity']:.3f}] {row['note_text'][:80]}...")
@@ -65,7 +65,7 @@ print("\n🔍 Query: 'knee replacement surgery'")
 for _, row in search_similar_notes("knee replacement surgery", 3).iterrows():
     print(f"  [{row['similarity']:.3f}] {row['note_text'][:80]}...")
 
-5️⃣ Billing Code Validation Function
+#@title 5️⃣ Billing Code Validation Function
 CODE_DESCRIPTIONS = {
     'E11.9': 'Type 2 diabetes mellitus without complications',
     'I21.0': 'ST elevation myocardial infarction anterior wall',

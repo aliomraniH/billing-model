@@ -1,9 +1,9 @@
 # Medical Billing ML - Notebook 4: Hugging Face AutoTrain Workflow
 # Prerequisites: Run notebooks 01-03 first
 
-1️⃣ Install & Setup Hugging Face
+#@title 1️⃣ Install & Setup Hugging Face
 !pip install -q autotrain-advanced
-from Deepnote environment import userdata
+import os
 from sqlalchemy import create_engine
 from huggingface_hub import login, HfApi
 from datasets import Dataset, DatasetDict
@@ -19,7 +19,7 @@ print("✅ Logged in to Hugging Face!")
 DATABASE_URL = os.getenv('VERCEL_POSTGRES_URL')
 engine = create_engine(DATABASE_URL)
 
-2️⃣ Prepare & Upload Dataset
+#@title 2️⃣ Prepare & Upload Dataset
 training_query = """
 SELECT total_charge, total_paid,
        CASE WHEN total_charge > 0 THEN total_paid / total_charge ELSE 0 END as payment_ratio,
@@ -43,7 +43,7 @@ DATASET_NAME = f"{HF_USERNAME}/medical-billing-outliers"
 dataset_dict.push_to_hub(DATASET_NAME, private=True)
 print(f"✅ Dataset uploaded to: https://huggingface.co/datasets/{DATASET_NAME}")
 
-3️⃣ Train XGBoost Locally (Quick)
+#@title 3️⃣ Train XGBoost Locally (Quick)
 import xgboost as xgb
 from sklearn.metrics import classification_report, roc_auc_score
 
@@ -65,7 +65,7 @@ print("\n📊 MODEL EVALUATION")
 print(classification_report(y_test, y_pred, target_names=['Normal', 'Outlier']))
 print(f"ROC-AUC: {roc_auc_score(y_test, y_prob):.4f}")
 
-4️⃣ Upload Model to Hub
+#@title 4️⃣ Upload Model to Hub
 import os, json
 
 model_dir = '/work/medical_outlier_model'
