@@ -21,7 +21,7 @@ if not DATABASE_URL:
 
 # HuggingFace Inference API endpoint
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-API_URL = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{EMBEDDING_MODEL}"
+API_URL = f"https://router.huggingface.co/pipeline/feature-extraction/{EMBEDDING_MODEL}"
 
 # Setup headers for API
 headers = {}
