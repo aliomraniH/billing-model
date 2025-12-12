@@ -63,7 +63,7 @@ print(f"   Using {len(claim_ids)} claim IDs")
 
 # Generate embeddings and store
 print("\n🔄 Generating embeddings and storing in database...")
-with engine.connect() as conn:
+with engine.begin() as conn:  # Changed from engine.connect() to engine.begin()
     for i, note in enumerate(sample_notes):
         if i < len(claim_ids):
             # Generate embedding
@@ -80,7 +80,7 @@ with engine.connect() as conn:
                 'ntext': note['note_text'],
                 'emb': emb_str
             })
-    conn.commit()
+    # Auto-commits on context exit
 
 print(f"✅ Stored {len(sample_notes)} clinical notes with embeddings!")
 
