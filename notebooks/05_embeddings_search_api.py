@@ -3,14 +3,13 @@
 # This version uses HuggingFace Inference API - no heavy ML dependencies needed!
 
 # Install only lightweight dependencies
-get_ipython().system('pip install -q sqlalchemy psycopg2-binary pandas numpy requests')
+get_ipython().system('pip install -q sqlalchemy psycopg2-binary pandas numpy huggingface_hub')
 
 import os
-import requests
-import json
 from sqlalchemy import create_engine, text
 import pandas as pd
 import numpy as np
+from huggingface_hub import InferenceClient
 
 # Configuration
 DATABASE_URL = os.getenv('VERCEL_POSTGRES_URL')
@@ -19,18 +18,17 @@ HF_API_KEY = os.getenv('HUGGINGFACE_API_KEY')  # Optional - works without it but
 if not DATABASE_URL:
     raise ValueError("VERCEL_POSTGRES_URL not found! Add it to Project Settings → Environment Variables")
 
-# HuggingFace Inference API endpoint (for embeddings, not chat)
+# HuggingFace configuration
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-API_URL = f"https://api-inference.huggingface.co/models/{EMBEDDING_MODEL}"
 
-# Setup headers for API
-headers = {}
 if HF_API_KEY:
-    headers["Authorization"] = f"Bearer {HF_API_KEY}"
     print("✅ Using HuggingFace API key")
 else:
     print("ℹ️  No HuggingFace API key - using rate-limited free tier")
     print("   To add key: Project Settings → Environment Variables → HUGGINGFACE_API_KEY")
+
+# Initialize HuggingFace InferenceClient
+hf_client = InferenceClient(token=HF_API_KEY if HF_API_KEY else None)
 
 engine = create_engine(DATABASE_URL)
 
@@ -44,46 +42,32 @@ except Exception as e:
     print(f"❌ Connection failed: {e}")
     raise
 
-# Embedding function using HuggingFace API
+# Embedding function using HuggingFace InferenceClient
 def get_embedding(text: str, retries: int = 3) -> list:
     """
-    Get embedding for text using HuggingFace Inference API
+    Get embedding for text using HuggingFace InferenceClient
     Returns 384-dimensional vector for all-MiniLM-L6-v2
     """
-    payload = {
-        "inputs": text,
-        "options": {"wait_for_model": True}
-    }
-
     for attempt in range(retries):
         try:
-            response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-
-            if response.status_code == 200:
-                embedding = response.json()
-                # API returns nested list, flatten it
-                if isinstance(embedding, list) and len(embedding) > 0:
-                    if isinstance(embedding[0], list):
-                        return embedding[0]
-                    return embedding
-            elif response.status_code == 503:
-                # Model is loading, wait and retry
-                print(f"⏳ Model loading... (attempt {attempt + 1}/{retries})")
-                import time
-                time.sleep(5)
-                continue
-            else:
-                print(f"❌ API Error {response.status_code}: {response.text}")
-                raise Exception(f"API request failed: {response.status_code}")
-
-        except requests.exceptions.RequestException as e:
+            embedding = hf_client.feature_extraction(
+                text,
+                model=EMBEDDING_MODEL
+            )
+            # Handle numpy array or list response
+            if hasattr(embedding, 'tolist'):
+                return embedding.tolist()
+            if isinstance(embedding, list) and len(embedding) > 0:
+                if isinstance(embedding[0], list):
+                    return embedding[0]
+            return list(embedding)
+        except Exception as e:
             print(f"⚠️  Request error (attempt {attempt + 1}/{retries}): {e}")
             if attempt < retries - 1:
                 import time
-                time.sleep(2)
+                time.sleep(5)
             else:
                 raise
-
     raise Exception("Failed to get embedding after all retries")
 
 # Test the API
