@@ -19,9 +19,9 @@ HF_API_KEY = os.getenv('HUGGINGFACE_API_KEY')  # Optional - works without it but
 if not DATABASE_URL:
     raise ValueError("VERCEL_POSTGRES_URL not found! Add it to Project Settings → Environment Variables")
 
-# HuggingFace Inference API endpoint
+# HuggingFace Inference API endpoint (for embeddings, not chat)
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-API_URL = f"https://router.huggingface.co/pipeline/feature-extraction/{EMBEDDING_MODEL}"
+API_URL = f"https://api-inference.huggingface.co/models/{EMBEDDING_MODEL}"
 
 # Setup headers for API
 headers = {}
@@ -50,7 +50,10 @@ def get_embedding(text: str, retries: int = 3) -> list:
     Get embedding for text using HuggingFace Inference API
     Returns 384-dimensional vector for all-MiniLM-L6-v2
     """
-    payload = {"inputs": text}
+    payload = {
+        "inputs": text,
+        "options": {"wait_for_model": True}
+    }
 
     for attempt in range(retries):
         try:
