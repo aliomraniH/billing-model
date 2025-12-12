@@ -119,9 +119,9 @@ with engine.begin() as conn:
             # Insert into database
             conn.execute(text("""
                 INSERT INTO clinical_notes (claim_id, note_type, note_text, embedding)
-                VALUES (:cid, :ntype, :ntext, :emb::vector)
+                VALUES (:cid, :ntype, :ntext, CAST(:emb AS vector))
                 ON CONFLICT (claim_id, note_type)
-                DO UPDATE SET note_text = :ntext, embedding = :emb::vector
+                DO UPDATE SET note_text = :ntext, embedding = CAST(:emb AS vector)
             """), {
                 'cid': claim_ids[i],
                 'ntype': note['note_type'],
@@ -151,10 +151,10 @@ def search_similar_notes(query: str, top_k: int = 5):
             claim_id,
             note_type,
             note_text,
-            1 - (embedding <=> :emb::vector) AS similarity
+            1 - (embedding <=> CAST(:emb AS vector)) AS similarity
         FROM clinical_notes
         WHERE embedding IS NOT NULL
-        ORDER BY embedding <=> :emb::vector
+        ORDER BY embedding <=> CAST(:emb AS vector)
         LIMIT :k
     """), engine, params={'emb': emb_str, 'k': top_k})
 
