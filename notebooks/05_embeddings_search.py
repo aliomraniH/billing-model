@@ -1,6 +1,10 @@
 # Medical Billing ML - Notebook 5: Embeddings & Similarity Search
 # Prerequisites: Run notebooks 01-02 first
 
+# Install only what we need for this notebook
+# Using compatible versions to avoid transformers import errors
+get_ipython().system('pip install -q --upgrade "transformers>=4.35.0" "sentence-transformers>=2.2.0" sqlalchemy psycopg2-binary pandas numpy')
+
 # Connect & Load Embedding Model
 import os
 from sqlalchemy import create_engine, text
