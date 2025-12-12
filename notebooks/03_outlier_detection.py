@@ -86,7 +86,7 @@ print("="*50)
 
 # Write Predictions to Database
 print("\n💾 Writing predictions to database...")
-with engine.connect() as conn:
+with engine.begin() as conn:  # Changed from engine.connect() to engine.begin()
     for _, row in df.iterrows():
         conn.execute(text("""
             UPDATE claims
@@ -97,7 +97,7 @@ with engine.connect() as conn:
             'is_outlier': bool(row['is_outlier']),
             'outlier_score': float(row['outlier_score'])
         })
-    conn.commit()
+    # Auto-commits on context exit
 
 print(f"✅ Updated {len(df):,} claims with outlier predictions")
 
