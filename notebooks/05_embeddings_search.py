@@ -1,9 +1,11 @@
 # Medical Billing ML - Notebook 5: Embeddings & Similarity Search
-# Prerequisites: Run notebooks 01-02 first
+# Prerequisites:
+# 1. Run notebooks 01-02 first to set up database and load data
+# 2. Migration runs automatically (creates separate embeddings table)
+# Note: This requires ~2GB of dependencies. For lighter option, use 05_embeddings_search_api.py
 
 # Install only what we need for this notebook
 # Using compatible versions to avoid dependency conflicts
-# Note: This requires ~2GB of dependencies. For lighter option, use 05_embeddings_search_api.py
 get_ipython().system('pip install -q "torch>=2.0.0,<2.2.0" "transformers>=4.35.0,<5.0.0" "sentence-transformers>=2.2.0" sqlalchemy psycopg2-binary pandas numpy')
 
 # Connect & Load Embedding Model
@@ -29,12 +31,42 @@ except Exception as e:
     print(f"❌ Connection failed: {e}")
     raise
 
+# Run migration if needed (creates separate embeddings table)
+print("\n🔧 Checking database schema...")
+try:
+    with engine.begin() as conn:
+        # Check if migration is needed
+        result = conn.execute(text("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables
+                WHERE table_name = 'clinical_note_embeddings'
+            )
+        """))
+        migration_exists = result.fetchone()[0]
+
+        if not migration_exists:
+            print("⚠️  Running migration to create embeddings table...")
+            # Read and execute migration
+            migration_path = os.path.join(os.path.dirname(__file__), '..', 'sql', 'migrations', '001_separate_embeddings_table.sql')
+            with open(migration_path, 'r') as f:
+                migration_sql = f.read()
+            conn.execute(text(migration_sql))
+            print("✅ Migration completed successfully!")
+        else:
+            print("✅ Schema up to date - embeddings table exists")
+except Exception as e:
+    print(f"ℹ️  Note: If migration fails, run manually:")
+    print(f"   psql $DATABASE_URL -f sql/migrations/001_separate_embeddings_table.sql")
+    # Don't raise - migration might already be applied
+    pass
+
 # Load embedding model
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 print("\n📥 Loading embedding model...")
 embed_model = SentenceTransformer('all-MiniLM-L6-v2')
 embedding_dim = embed_model.get_sentence_embedding_dimension()
 print(f"✅ Model loaded successfully")
-print(f"   Model: all-MiniLM-L6-v2")
+print(f"   Model: {EMBEDDING_MODEL}")
 print(f"   Embedding dimensions: {embedding_dim}")
 
 # Create Sample Clinical Notes
@@ -68,21 +100,38 @@ print(f"   Using {len(claim_ids)} claim IDs")
 
 # Generate embeddings and store
 print("\n🔄 Generating embeddings and storing in database...")
-with engine.begin() as conn:  # Changed from engine.connect() to engine.begin()
+with engine.begin() as conn:
     for i, note in enumerate(sample_notes):
         if i < len(claim_ids):
             # Generate embedding
             embedding = embed_model.encode([note['note_text']])[0]
             emb_str = '[' + ','.join(map(str, embedding)) + ']'
 
-            # Insert into database
-            conn.execute(text("""
-                INSERT INTO clinical_notes (claim_id, note_type, note_text, embedding)
-                VALUES (:cid, :ntype, :ntext, :emb::vector)
+            # Step 1: Insert/update clinical note
+            result = conn.execute(text("""
+                INSERT INTO clinical_notes (claim_id, note_type, note_text)
+                VALUES (:cid, :ntype, :ntext)
+                ON CONFLICT (claim_id, note_type)
+                DO UPDATE SET note_text = :ntext
+                RETURNING note_id
             """), {
                 'cid': claim_ids[i],
                 'ntype': note['note_type'],
-                'ntext': note['note_text'],
+                'ntext': note['note_text']
+            })
+            note_id = result.fetchone()[0]
+
+            # Step 2: Insert/update embedding in separate table
+            conn.execute(text("""
+                INSERT INTO clinical_note_embeddings (note_id, model_name, embedding)
+                VALUES (:nid, :model, CAST(:emb AS vector))
+                ON CONFLICT (note_id, model_name)
+                DO UPDATE SET
+                    embedding = CAST(:emb AS vector),
+                    updated_at = NOW()
+            """), {
+                'nid': note_id,
+                'model': EMBEDDING_MODEL,
                 'emb': emb_str
             })
     # Auto-commits on context exit
@@ -90,25 +139,31 @@ with engine.begin() as conn:  # Changed from engine.connect() to engine.begin()
 print(f"✅ Stored {len(sample_notes)} clinical notes with embeddings!")
 
 # Similarity Search Function
-def search_similar_notes(query: str, top_k: int = 5):
+def search_similar_notes(query: str, top_k: int = 5, model: str = None):
     """Search for clinically similar notes using semantic similarity"""
+    # Use default model if not specified
+    if model is None:
+        model = EMBEDDING_MODEL
+
     # Generate query embedding
     query_embedding = embed_model.encode([query])[0]
     emb_str = '[' + ','.join(map(str, query_embedding)) + ']'
 
-    # Search using pgvector cosine distance
+    # Search using pgvector cosine distance with JOIN to embeddings table
     results = pd.read_sql(text("""
         SELECT
-            note_id,
-            claim_id,
-            note_type,
-            note_text,
-            1 - (embedding <=> :emb::vector) AS similarity
-        FROM clinical_notes
-        WHERE embedding IS NOT NULL
-        ORDER BY embedding <=> :emb::vector
+            cn.note_id,
+            cn.claim_id,
+            cn.note_type,
+            cn.note_text,
+            cne.model_name,
+            1 - (cne.embedding <=> CAST(:emb AS vector)) AS similarity
+        FROM clinical_notes cn
+        INNER JOIN clinical_note_embeddings cne ON cn.note_id = cne.note_id
+        WHERE cne.model_name = :model
+        ORDER BY cne.embedding <=> CAST(:emb AS vector)
         LIMIT :k
-    """), engine, params={'emb': emb_str, 'k': top_k})
+    """), engine, params={'emb': emb_str, 'model': model, 'k': top_k})
 
     return results
 
@@ -140,17 +195,22 @@ CODE_DESCRIPTIONS = {
     'M17.11': 'Primary osteoarthritis right knee',
 }
 
-def validate_billing_code(claim_id: int, icd_code: str):
+def validate_billing_code(claim_id: int, icd_code: str, model: str = None):
     """
     Validate if a billing code matches the clinical documentation
     Returns similarity score and validation result
     """
-    # Get clinical notes for this claim
+    # Use default model if not specified
+    if model is None:
+        model = EMBEDDING_MODEL
+
+    # Get clinical notes with embeddings for this claim
     notes = pd.read_sql(text("""
-        SELECT note_text
-        FROM clinical_notes
-        WHERE claim_id = :cid AND embedding IS NOT NULL
-    """), engine, params={'cid': claim_id})
+        SELECT cn.note_text, cne.note_id
+        FROM clinical_notes cn
+        INNER JOIN clinical_note_embeddings cne ON cn.note_id = cne.note_id
+        WHERE cn.claim_id = :cid AND cne.model_name = :model
+    """), engine, params={'cid': claim_id, 'model': model})
 
     if len(notes) == 0:
         return {
