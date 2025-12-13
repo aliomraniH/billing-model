@@ -1,29 +1,19 @@
 # Medical Billing ML - Notebook 6: LLM Clustering & Category Cache
 # Prerequisites: Run notebooks 01, 02, 05 first
 # This notebook uses Claude API to intelligently cluster claims and create category-specific cache tables
+# Required packages: anthropic, scikit-learn>=1.3, sentence-transformers
 
 #=============================================================================
-# DEPENDENCIES & SETUP
+# IMPORTS
 #=============================================================================
-
-print("📦 Installing dependencies...")
-import subprocess
-import sys
-
-# Install required packages
-subprocess.check_call([sys.executable, "-m", "pip", "install", "-q",
-                      "anthropic", "scikit-learn>=1.3", "sentence-transformers"])
 
 import os
 import json
 import numpy as np
 import pandas as pd
 from sqlalchemy import create_engine, text
-from sentence_transformers import SentenceTransformer
-from sklearn.cluster import HDBSCAN, KMeans
-from anthropic import Anthropic
 
-print("✅ Dependencies installed successfully")
+print("✅ Imports loaded successfully")
 
 #=============================================================================
 # DATABASE CONNECTION
@@ -50,10 +40,11 @@ except Exception as e:
     raise
 
 #=============================================================================
-# LOAD EMBEDDING MODEL
+# LOAD EMBEDDING MODEL (for search functions)
 #=============================================================================
 
 print("\n📥 Loading embedding model...")
+from sentence_transformers import SentenceTransformer
 embed_model = SentenceTransformer('all-MiniLM-L6-v2')
 embedding_dim = embed_model.get_sentence_embedding_dimension()
 print(f"✅ Model loaded: all-MiniLM-L6-v2 ({embedding_dim} dimensions)")
@@ -94,39 +85,52 @@ print(f"   Embedding matrix shape: {embeddings_matrix.shape}")
 print("\n🔬 Performing HDBSCAN clustering...")
 print("   Parameters: min_cluster_size=3, cluster_selection_method='eom'")
 
+# Import clustering libraries
+from sklearn.cluster import HDBSCAN, KMeans
+
 # Use sklearn's built-in HDBSCAN with store_centers to get centroids
-clusterer = HDBSCAN(
-    min_cluster_size=3,
-    min_samples=None,  # Defaults to min_cluster_size
-    metric='euclidean',
-    cluster_selection_method='eom',
-    store_centers='centroid'  # This stores cluster centroids
-)
+try:
+    clusterer = HDBSCAN(
+        min_cluster_size=3,
+        min_samples=None,  # Defaults to min_cluster_size
+        metric='euclidean',
+        cluster_selection_method='eom',
+        store_centers='centroid'  # This stores cluster centroids
+    )
 
-cluster_labels = clusterer.fit_predict(embeddings_matrix)
-embeddings_df['cluster_label'] = cluster_labels
+    cluster_labels = clusterer.fit_predict(embeddings_matrix)
+    embeddings_df['cluster_label'] = cluster_labels
 
-# Count clusters (excluding noise points labeled -1)
-unique_clusters = [c for c in np.unique(cluster_labels) if c != -1]
-noise_count = np.sum(cluster_labels == -1)
+    # Count clusters (excluding noise points labeled -1)
+    unique_clusters = [c for c in np.unique(cluster_labels) if c != -1]
+    noise_count = np.sum(cluster_labels == -1)
 
-print(f"✅ Clustering complete!")
-print(f"   Found {len(unique_clusters)} clusters")
-print(f"   Noise points: {noise_count}")
+    print(f"✅ Clustering complete!")
+    print(f"   Found {len(unique_clusters)} clusters")
+    print(f"   Noise points: {noise_count}")
 
-# Fallback to KMeans if too few clusters
-if len(unique_clusters) < 3:
-    print("\n⚠️  Too few clusters found, falling back to KMeans with k=5...")
+    # Fallback to KMeans if too few clusters
+    if len(unique_clusters) < 3:
+        print("\n⚠️  Too few clusters found, falling back to KMeans with k=5...")
+        kmeans = KMeans(n_clusters=5, random_state=42, n_init=10)
+        cluster_labels = kmeans.fit_predict(embeddings_matrix)
+        embeddings_df['cluster_label'] = cluster_labels
+        unique_clusters = list(range(5))
+        centroids = kmeans.cluster_centers_
+        print(f"✅ KMeans clustering complete! Created {len(unique_clusters)} clusters")
+    else:
+        # Get centroids from HDBSCAN
+        centroids = clusterer.centroids_
+
+except Exception as e:
+    print(f"⚠️  HDBSCAN failed ({e}), using KMeans fallback...")
     kmeans = KMeans(n_clusters=5, random_state=42, n_init=10)
     cluster_labels = kmeans.fit_predict(embeddings_matrix)
     embeddings_df['cluster_label'] = cluster_labels
     unique_clusters = list(range(5))
-    # Calculate centroids manually
     centroids = kmeans.cluster_centers_
+    noise_count = 0
     print(f"✅ KMeans clustering complete! Created {len(unique_clusters)} clusters")
-else:
-    # Get centroids from HDBSCAN
-    centroids = clusterer.centroids_
 
 # Display cluster distribution
 print("\n📈 Cluster distribution:")
@@ -144,8 +148,10 @@ ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
 if not ANTHROPIC_API_KEY:
     print("⚠️  ANTHROPIC_API_KEY not found! Using generic category names.")
     use_llm = False
+    client = None
 else:
     try:
+        from anthropic import Anthropic
         client = Anthropic()  # Uses ANTHROPIC_API_KEY env var
         print("✅ Claude API initialized")
         use_llm = True
@@ -153,6 +159,7 @@ else:
         print(f"⚠️  Failed to initialize Claude API: {e}")
         print("   Falling back to generic category names")
         use_llm = False
+        client = None
 
 def label_cluster_with_llm(sample_notes: list, cluster_id: int) -> dict:
     """Use Claude to analyze cluster and generate category metadata"""
