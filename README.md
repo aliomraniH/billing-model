@@ -29,11 +29,16 @@ An experimental ML system for detecting billing anomalies, validating clinical c
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
 │ Vercel Postgres │◄──►│    Deepnote      │───►│ Hugging Face    │
-│ + pgvector      │    │   Notebook       │    │ AutoTrain       │
+│  (Relational)   │    │   Notebook       │    │ AutoTrain       │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
         ▲                       │                      │
         └───────────────────────┴──────────────────────┘
                     Predictions written back
+
+┌─────────────────┐
+│    Pinecone     │    Vector embeddings (managed service)
+│ (Free tier OK)  │    Alternative to pgvector for notebook 05
+└─────────────────┘
 ```
 
 ### Technology Stack
@@ -41,7 +46,7 @@ An experimental ML system for detecting billing anomalies, validating clinical c
 | Component | Tool | Cost | Why |
 |-----------|------|------|-----|
 | **Database** | Vercel Postgres (Neon) | Free | Managed serverless Postgres with pgvector 0.8.0 built-in |
-| **Vector Store** | pgvector | Free | Single DB for relational + embeddings (up to 2000 dimensions) |
+| **Vector Store** | Pinecone (or pgvector) | Free | Purpose-built vector DB for embeddings (100K vectors free tier) |
 | **Development** | Deepnote | Free-$49/mo | Collaborative notebooks, GPU access, persistent storage |
 | **AutoML** | Hugging Face AutoTrain | $15-25/mo | No-code tabular + NLP, pay-per-use compute |
 | **Clinical NLP** | medspaCy + scispaCy | Free | Negation detection, UMLS entity linking |
@@ -99,6 +104,7 @@ billing-model/
    - Add environment variables:
      - `VERCEL_POSTGRES_URL` = `postgresql://user:pass@host:5432/db?sslmode=require`
      - `HF_TOKEN` = `hf_xxxxxxxxxxxxxxxxxxxxx`
+     - `PINECONE_API_KEY` = `your-pinecone-key` (for notebook 05 - get free at https://www.pinecone.io/)
    - Variables are automatically available via `os.getenv()`
 
    **For Local Development**:
@@ -152,7 +158,7 @@ Core tables:
 - `claims` - Main billing claims (patient, provider, charges, outlier scores)
 - `diagnoses` - ICD-10 diagnosis codes linked to claims
 - `procedures` - CPT/HCPCS procedure codes
-- `clinical_notes` - Text notes with vector embeddings (384-dim)
+- `clinical_notes` - Text notes (embeddings stored in Pinecone, not in Postgres)
 - `predictions` - Model outputs (outlier detection, code suggestions)
 
 See [`sql/schema.sql`](sql/schema.sql) for full definitions.
@@ -196,7 +202,7 @@ See [`sql/schema.sql`](sql/schema.sql) for full definitions.
 - Semantic similarity between clinical notes and billing codes
 - all-MiniLM-L6-v2 embeddings (384 dimensions)
 - Cosine similarity threshold: 0.4
-- pgvector for fast nearest-neighbor search
+- Pinecone for fast nearest-neighbor search (managed vector database)
 
 ### 3. Code Suggestion
 - XGBoost classifier for tabular features
@@ -206,9 +212,8 @@ See [`sql/schema.sql`](sql/schema.sql) for full definitions.
 ## Open Questions
 
 1. **MIMIC-IV Access:** Prioritize PhysioNet credentialing early, or fully develop pipeline with Synthea first?
-2. **Vector DB Scaling:** At what point switch from pgvector to dedicated vector DB (Pinecone/Qdrant)?
-3. **Code Granularity:** Predict ICD-10 at category level (3-char) or full code (5-7 char)?
-4. **Ground Truth:** How to establish what constitutes a 'true' outlier for evaluation?
+2. **Code Granularity:** Predict ICD-10 at category level (3-char) or full code (5-7 char)?
+3. **Ground Truth:** How to establish what constitutes a 'true' outlier for evaluation?
 
 ## Contributing
 
