@@ -59,19 +59,79 @@ try:
 
         if not migration_exists:
             print("⚠️  Running migration to create embeddings table...")
-            # Read and execute migration
-            migration_path = os.path.join(os.path.dirname(__file__), '..', 'sql', 'migrations', '001_separate_embeddings_table.sql')
-            with open(migration_path, 'r') as f:
-                migration_sql = f.read()
-            conn.execute(text(migration_sql))
+
+            # Execute migration SQL directly (inline for Deepnote compatibility)
+            migration_sql = """
+-- Step 1: Create the new embeddings table
+CREATE TABLE IF NOT EXISTS clinical_note_embeddings (
+    embedding_id BIGSERIAL PRIMARY KEY,
+    note_id BIGINT NOT NULL REFERENCES clinical_notes(note_id) ON DELETE CASCADE,
+    model_name VARCHAR(100) NOT NULL,
+    embedding VECTOR(384),
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(note_id, model_name)
+);
+
+-- Create index for similarity search
+CREATE INDEX IF NOT EXISTS idx_embeddings_vector
+ON clinical_note_embeddings USING ivfflat (embedding vector_cosine_ops)
+WITH (lists = 100);
+
+-- Step 2: Add unique constraint to clinical_notes
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'unique_claim_note_type'
+    ) THEN
+        ALTER TABLE clinical_notes
+        ADD CONSTRAINT unique_claim_note_type UNIQUE (claim_id, note_type);
+    END IF;
+END $$;
+
+-- Step 3: Migrate existing embeddings (if any)
+INSERT INTO clinical_note_embeddings (note_id, model_name, embedding)
+SELECT
+    note_id,
+    'sentence-transformers/all-MiniLM-L6-v2' as model_name,
+    embedding
+FROM clinical_notes
+WHERE embedding IS NOT NULL
+ON CONFLICT (note_id, model_name) DO UPDATE
+SET embedding = EXCLUDED.embedding, updated_at = NOW();
+"""
+            # Execute each statement separately for better error handling
+            for statement in migration_sql.split(';'):
+                statement = statement.strip()
+                if statement and not statement.startswith('--'):
+                    conn.execute(text(statement))
+
             print("✅ Migration completed successfully!")
         else:
             print("✅ Schema up to date - embeddings table exists")
 except Exception as e:
-    print(f"ℹ️  Note: If migration fails, run manually:")
-    print(f"   psql $DATABASE_URL -f sql/migrations/001_separate_embeddings_table.sql")
-    # Don't raise - migration might already be applied
-    pass
+    print(f"⚠️  Migration error: {e}")
+    print(f"ℹ️  Attempting to create unique constraint directly...")
+    try:
+        with engine.begin() as conn:
+            # Try to create just the unique constraint
+            conn.execute(text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'unique_claim_note_type'
+                    ) THEN
+                        ALTER TABLE clinical_notes
+                        ADD CONSTRAINT unique_claim_note_type UNIQUE (claim_id, note_type);
+                    END IF;
+                END $$;
+            """))
+            print("✅ Unique constraint created")
+    except Exception as e2:
+        print(f"❌ Could not create constraint: {e2}")
+        raise
 
 # Embedding function using HuggingFace InferenceClient
 def get_embedding(text: str, retries: int = 3) -> list:
