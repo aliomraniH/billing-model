@@ -1,8 +1,10 @@
 # Medical Billing ML - Notebook 5: Embeddings & Similarity Search
 # Architecture: Vercel Postgres (notes) + Pinecone (vectors)
+# Updated for Pinecone SDK v8.0.0
 
 # %%
-get_ipython().system('pip install -q sqlalchemy psycopg2-binary pandas numpy huggingface_hub pinecone-client')
+# IMPORTANT: Use 'pinecone' NOT 'pinecone-client'
+get_ipython().system('pip install -q sqlalchemy psycopg2-binary pandas numpy huggingface_hub pinecone')
 
 # %%
 import os
@@ -11,7 +13,14 @@ from sqlalchemy import create_engine, text
 import pandas as pd
 import numpy as np
 from huggingface_hub import InferenceClient
-from pinecone import Pinecone, ServerlessSpec
+from pinecone import (
+    Pinecone,
+    ServerlessSpec,
+    CloudProvider,
+    AwsRegion,
+    Metric,
+    VectorType
+)
 
 # =============================================================================
 # CONFIGURATION
@@ -19,7 +28,7 @@ from pinecone import Pinecone, ServerlessSpec
 
 DATABASE_URL = os.getenv('VERCEL_POSTGRES_URL')
 HF_API_KEY = os.getenv('HUGGINGFACE_API_KEY')
-PINECONE_API_KEY = os.getenv('PINECONE_API_KEY')  # Get free key at pinecone.io
+PINECONE_API_KEY = os.getenv('PINECONE_API_KEY')
 
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
@@ -47,25 +56,33 @@ with engine.connect() as conn:
 hf_client = InferenceClient(token=HF_API_KEY if HF_API_KEY else None)
 print("✅ HuggingFace client ready")
 
-# Pinecone
+# Pinecone - New v8 initialization
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
-# Create index if doesn't exist
-existing_indexes = [idx.name for idx in pc.list_indexes()]
-if PINECONE_INDEX_NAME not in existing_indexes:
+# Create index if doesn't exist - use has_index() method
+if not pc.has_index(PINECONE_INDEX_NAME):
     print(f"📦 Creating Pinecone index '{PINECONE_INDEX_NAME}'...")
-    pc.create_index(
+    index_config = pc.create_index(
         name=PINECONE_INDEX_NAME,
         dimension=EMBEDDING_DIM,
-        metric="cosine",
-        spec=ServerlessSpec(cloud="aws", region="us-east-1")
+        metric=Metric.COSINE,
+        spec=ServerlessSpec(
+            cloud=CloudProvider.AWS,
+            region=AwsRegion.US_EAST_1
+        ),
+        vector_type=VectorType.DENSE
     )
-    time.sleep(10)  # Wait for index to be ready
+    # Wait for index to be ready
+    while not pc.describe_index(PINECONE_INDEX_NAME).status.ready:
+        print("⏳ Waiting for index to be ready...")
+        time.sleep(5)
     print("✅ Pinecone index created!")
 else:
     print(f"✅ Pinecone index '{PINECONE_INDEX_NAME}' exists")
 
-index = pc.Index(PINECONE_INDEX_NAME)
+# Get index client using host from describe_index
+index_info = pc.describe_index(PINECONE_INDEX_NAME)
+index = pc.Index(host=index_info.host)
 print(f"✅ Pinecone ready! Index stats: {index.describe_index_stats()}")
 
 # =============================================================================
@@ -101,7 +118,6 @@ print(f"✅ Embeddings working! Dimension: {len(test_emb)}")
 print("\n🔧 Setting up Postgres schema...")
 
 with engine.begin() as conn:
-    # Create clinical_notes table (no embedding column!)
     conn.execute(text("""
         CREATE TABLE IF NOT EXISTS clinical_notes (
             note_id SERIAL PRIMARY KEY,
@@ -112,7 +128,6 @@ with engine.begin() as conn:
         )
     """))
 
-    # Create unique constraint for upsert
     conn.execute(text("""
         CREATE UNIQUE INDEX IF NOT EXISTS idx_clinical_notes_claim_type
         ON clinical_notes (claim_id, note_type)
@@ -132,7 +147,6 @@ sample_notes = [
     {"note_type": "procedure", "note_text": "Colonoscopy for CRC screening. Two 5mm tubular adenomas removed from ascending colon. No malignancy. Repeat in 5 years."},
 ]
 
-# Get claim IDs
 claim_ids = pd.read_sql("SELECT claim_id FROM claims LIMIT 5", engine)['claim_id'].tolist()
 print(f"\n📝 Using {len(claim_ids)} claim IDs")
 
@@ -165,23 +179,23 @@ with engine.begin() as conn:
         # 2. Generate embedding
         embedding = get_embedding(note['note_text'])
 
-        # 3. Prepare for Pinecone (batch upsert)
-        vectors_to_upsert.append({
-            "id": f"note_{note_id}",
-            "values": embedding,
-            "metadata": {
+        # 3. Prepare for Pinecone using tuple format (id, values, metadata)
+        vectors_to_upsert.append((
+            f"note_{note_id}",
+            embedding,
+            {
                 "note_id": note_id,
                 "claim_id": claim_ids[i],
                 "note_type": note['note_type'],
                 "model": EMBEDDING_MODEL
             }
-        })
+        ))
 
         print("✓")
-        time.sleep(1)  # Rate limiting
+        time.sleep(1)
 
 # Batch upsert to Pinecone
-index.upsert(vectors=vectors_to_upsert)
+index.upsert(vectors=vectors_to_upsert, namespace="medical-notes")
 print(f"\n✅ Stored {len(vectors_to_upsert)} notes with embeddings!")
 
 # =============================================================================
@@ -196,7 +210,8 @@ def search_similar_notes(query: str, top_k: int = 5):
     results = index.query(
         vector=query_embedding,
         top_k=top_k,
-        include_metadata=True
+        include_metadata=True,
+        namespace="medical-notes"
     )
 
     # Fetch full note text from Postgres
@@ -253,7 +268,6 @@ CODE_DESCRIPTIONS = {
 
 def validate_billing_code(claim_id: int, icd_code: str):
     """Validate if billing code matches clinical documentation"""
-    # Get notes for this claim from Postgres
     notes = pd.read_sql(
         text("SELECT note_id, note_text FROM clinical_notes WHERE claim_id = :cid"),
         engine, params={'cid': claim_id}
@@ -262,19 +276,16 @@ def validate_billing_code(claim_id: int, icd_code: str):
     if len(notes) == 0:
         return {'valid': None, 'reason': 'No clinical notes found', 'similarity': 0.0}
 
-    # Get code description embedding
     code_desc = CODE_DESCRIPTIONS.get(icd_code, f'ICD-10 code {icd_code}')
     code_emb = get_embedding(code_desc)
 
-    # Query Pinecone for this claim's notes
-    note_ids = [f"note_{nid}" for nid in notes['note_id'].tolist()]
-
-    # Search with filter (if notes exist in Pinecone)
+    # Search with metadata filter
     results = index.query(
         vector=code_emb,
         top_k=1,
-        filter={"claim_id": claim_id},
-        include_metadata=True
+        filter={"claim_id": {"$eq": claim_id}},
+        include_metadata=True,
+        namespace="medical-notes"
     )
 
     max_sim = results.matches[0].score if results.matches else 0.0
