@@ -1,12 +1,11 @@
 # Medical Billing ML - Notebook 5: Embeddings & Similarity Search
 # Prerequisites: Run notebooks 01-02 first
 
-# Connect & Load Embedding Model
+# Import base dependencies
 import os
-from sqlalchemy import create_engine, text
-from sentence_transformers import SentenceTransformer
 import pandas as pd
 import numpy as np
+from sqlalchemy import create_engine, text
 
 DATABASE_URL = os.getenv('VERCEL_POSTGRES_URL')
 if not DATABASE_URL:
@@ -24,13 +23,24 @@ except Exception as e:
     print(f"❌ Connection failed: {e}")
     raise
 
-# Load embedding model
+# Load embedding model (lazy import to avoid PyTorch initialization issues)
 print("\n📥 Loading embedding model...")
-embed_model = SentenceTransformer('all-MiniLM-L6-v2')
-embedding_dim = embed_model.get_sentence_embedding_dimension()
-print(f"✅ Model loaded successfully")
-print(f"   Model: all-MiniLM-L6-v2")
-print(f"   Embedding dimensions: {embedding_dim}")
+try:
+    from sentence_transformers import SentenceTransformer
+    embed_model = SentenceTransformer('all-MiniLM-L6-v2')
+    embedding_dim = embed_model.get_sentence_embedding_dimension()
+    print(f"✅ Model loaded successfully")
+    print(f"   Model: all-MiniLM-L6-v2")
+    print(f"   Embedding dimensions: {embedding_dim}")
+except Exception as e:
+    print(f"❌ Failed to load sentence_transformers: {e}")
+    print("\n⚠️  PyTorch Compatibility Issue Detected!")
+    print("   This is usually caused by version conflicts between torch and sentence-transformers.")
+    print("\n   To fix this issue, run these commands in your terminal:")
+    print("   pip uninstall -y torch torchvision torchaudio sentence-transformers")
+    print("   pip install torch==2.0.1 sentence-transformers==2.2.2")
+    print("\n   Then restart your notebook kernel and try again.")
+    raise
 
 # Create Comprehensive Clinical Notes for Clustering
 print("\n📝 Creating comprehensive clinical notes dataset...")
