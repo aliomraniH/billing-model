@@ -16,6 +16,14 @@ print("✅ HF API: router.huggingface.co (December 2025)")
 print("=" * 70 + "\n")
 
 # ============================================================
+# INSTALL DEPENDENCIES (use new pinecone package)
+# ============================================================
+# ⚠️ Pinecone client rename: uninstall legacy `pinecone-client`
+# !pip uninstall -y pinecone-client
+# Then install required packages (minimal, no torch needed)
+# !pip install -q huggingface_hub pinecone numpy pandas sqlalchemy psycopg2-binary requests
+
+# ============================================================
 # IMPORTS
 # ============================================================
 import os
