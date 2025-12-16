@@ -294,12 +294,14 @@ Install required packages:
 ```bash
 pip install \
     huggingface_hub \
-    pinecone-client \
+    pinecone \
     anthropic \
     numpy pandas \
     sqlalchemy psycopg2-binary \
     scikit-learn>=1.3
 ```
+
+> 📌 **Pinecone package update:** The official client is now published as `pinecone`. Uninstall any `pinecone-client` dependency to avoid import errors.
 
 **Note**: No PyTorch required! All embeddings generated via serverless API.
 
@@ -327,6 +329,16 @@ If you were using the old notebooks with pgvector:
 Error: Index 'medical-billing-notes' not found
 ```
 **Solution**: Notebook 05 auto-creates the index. Wait 10 seconds after creation.
+
+### Pinecone package rename error
+```
+Exception: The official Pinecone python package has been renamed from `pinecone-client` to `pinecone`.
+```
+**Solution**: Remove the legacy dependency and install the new one:
+```bash
+pip uninstall -y pinecone-client
+pip install pinecone
+```
 
 ### HuggingFace 410 Error
 ```

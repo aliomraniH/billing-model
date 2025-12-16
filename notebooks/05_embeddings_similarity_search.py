@@ -16,6 +16,14 @@ print("✅ HF API: router.huggingface.co (December 2025)")
 print("=" * 70 + "\n")
 
 # ============================================================
+# INSTALL DEPENDENCIES (use new pinecone package)
+# ============================================================
+# ⚠️ Pinecone client rename: uninstall legacy `pinecone-client`
+# !pip uninstall -y pinecone-client
+# Then install required packages (minimal, no torch needed)
+# !pip install -q huggingface_hub pinecone numpy pandas sqlalchemy psycopg2-binary requests
+
+# ============================================================
 # IMPORTS
 # ============================================================
 import os
@@ -69,7 +77,13 @@ with engine.connect() as conn:
 # ============================================================
 print("\n🌲 Initializing Pinecone...")
 
-from pinecone import Pinecone, ServerlessSpec
+try:
+    from pinecone import Pinecone, ServerlessSpec
+except ImportError as exc:
+    raise ImportError(
+        "Pinecone client not installed. Please uninstall legacy `pinecone-client` "
+        "and install the renamed `pinecone` package (see https://github.com/pinecone-io/pinecone-python-client)."
+    ) from exc
 
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
