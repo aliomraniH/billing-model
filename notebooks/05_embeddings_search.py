@@ -189,9 +189,11 @@ with engine.begin() as conn:  # Auto-commits on context exit
 
             # Insert into database
             # Note: Using CAST() instead of :: for better SQLAlchemy compatibility
+            # ON CONFLICT allows notebook to be run multiple times safely
             conn.execute(text("""
                 INSERT INTO clinical_notes (claim_id, note_type, note_text, embedding)
                 VALUES (:cid, :ntype, :ntext, CAST(:emb AS vector))
+                ON CONFLICT (claim_id, note_type) DO NOTHING
             """), {
                 'cid': claim_ids[i],
                 'ntype': note['note_type'],
