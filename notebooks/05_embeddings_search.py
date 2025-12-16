@@ -188,9 +188,10 @@ with engine.begin() as conn:  # Auto-commits on context exit
             emb_str = '[' + ','.join(map(str, embedding)) + ']'
 
             # Insert into database
+            # Note: Using CAST() instead of :: for better SQLAlchemy compatibility
             conn.execute(text("""
                 INSERT INTO clinical_notes (claim_id, note_type, note_text, embedding)
-                VALUES (:cid, :ntype, :ntext, :emb::vector)
+                VALUES (:cid, :ntype, :ntext, CAST(:emb AS vector))
             """), {
                 'cid': claim_ids[i],
                 'ntype': note['note_type'],
