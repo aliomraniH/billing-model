@@ -17,6 +17,14 @@ print("✅ Claude API: claude-sonnet-4-5-20250929")
 print("=" * 70 + "\n")
 
 # ============================================================
+# INSTALL DEPENDENCIES (use new pinecone package)
+# ============================================================
+# ⚠️ Pinecone client rename: uninstall legacy `pinecone-client`
+# !pip uninstall -y pinecone-client
+# Then install required packages (no local torch needed)
+# !pip install -q huggingface_hub pinecone anthropic numpy pandas sqlalchemy psycopg2-binary requests scikit-learn
+
+# ============================================================
 # IMPORTS
 # ============================================================
 import os
@@ -42,6 +50,7 @@ PINECONE_INDEX = "medical-billing-notes"
 missing = []
 if not DATABASE_URL: missing.append("VERCEL_POSTGRES_URL")
 if not PINECONE_API_KEY: missing.append("PINECONE_API_KEY")
+if not HF_TOKEN: missing.append("HF_TOKEN")
 if missing:
     raise ValueError(f"Missing required: {', '.join(missing)}")
 
@@ -63,6 +72,16 @@ with engine.connect() as conn:
     print(f"   ✅ Postgres: {result.fetchone()[0]:,} claims")
 
 # Pinecone
+# Auto-install the renamed Pinecone client if it's missing (avoids ModuleNotFoundError)
+import importlib.util
+import subprocess
+import sys
+
+if importlib.util.find_spec("pinecone") is None:
+    print("   📦 Installing Pinecone client (renamed from `pinecone-client`)...")
+    subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y", "pinecone-client"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "pinecone"])
+
 from pinecone import Pinecone
 pc = Pinecone(api_key=PINECONE_API_KEY)
 index = pc.Index(PINECONE_INDEX)
