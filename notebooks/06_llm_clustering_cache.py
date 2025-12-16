@@ -72,7 +72,13 @@ with engine.connect() as conn:
     print(f"   ✅ Postgres: {result.fetchone()[0]:,} claims")
 
 # Pinecone
-from pinecone import Pinecone
+try:
+    from pinecone import Pinecone
+except ImportError as exc:
+    raise ImportError(
+        "Pinecone client not installed. Run `pip uninstall -y pinecone-client` "
+        "and `pip install pinecone` before continuing."
+    ) from exc
 pc = Pinecone(api_key=PINECONE_API_KEY)
 index = pc.Index(PINECONE_INDEX)
 stats = index.describe_index_stats()
