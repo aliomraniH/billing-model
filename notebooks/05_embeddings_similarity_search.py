@@ -77,13 +77,17 @@ with engine.connect() as conn:
 # ============================================================
 print("\n🌲 Initializing Pinecone...")
 
-try:
-    from pinecone import Pinecone, ServerlessSpec
-except ImportError as exc:
-    raise ImportError(
-        "Pinecone client not installed. Please uninstall legacy `pinecone-client` "
-        "and install the renamed `pinecone` package (see https://github.com/pinecone-io/pinecone-python-client)."
-    ) from exc
+# Auto-install the renamed Pinecone client if it's missing (avoids ModuleNotFoundError)
+import importlib.util
+import subprocess
+import sys
+
+if importlib.util.find_spec("pinecone") is None:
+    print("   📦 Installing Pinecone client (renamed from `pinecone-client`)...")
+    subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y", "pinecone-client"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "pinecone"])
+
+from pinecone import Pinecone, ServerlessSpec
 
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
