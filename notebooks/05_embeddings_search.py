@@ -58,12 +58,15 @@ try:
     from huggingface_hub import InferenceClient
 
     if HF_TOKEN:
-        print("✅ Using Hugging Face Serverless Inference API (authenticated)")
-        # Simplified client initialization - library handles endpoint routing
-        client = InferenceClient(token=HF_TOKEN)
+        print("✅ Using Hugging Face Inference API (hf-inference provider)")
+        # NEW 2025 API: Must specify provider="hf-inference"
+        client = InferenceClient(
+            provider="hf-inference",
+            api_key=HF_TOKEN,
+        )
 
         def get_embedding(text: str) -> np.ndarray:
-            """Generate embedding using HF Serverless API with authentication"""
+            """Generate embedding using HF Inference API"""
             result = client.feature_extraction(
                 text,
                 model=MODEL_ID
@@ -82,12 +85,13 @@ try:
 
 except (ImportError, Exception) as e:
     # Fallback to raw HTTP requests
-    print("⚠️  Using HTTP API fallback (no authentication)")
+    print(f"⚠️  InferenceClient failed: {e}")
+    print("   Using HTTP API fallback...")
     import requests
     import time
 
-    # Updated API endpoint (api-inference.huggingface.co is deprecated as of 2025)
-    API_URL = f"https://api-inference.huggingface.co/models/{MODEL_ID}"
+    # NEW 2025 ENDPOINT: router.huggingface.co (old api-inference.huggingface.co is deprecated)
+    API_URL = f"https://router.huggingface.co/hf-inference/models/{MODEL_ID}"
 
     if HF_TOKEN:
         HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"}
@@ -99,7 +103,8 @@ except (ImportError, Exception) as e:
         response = requests.post(
             API_URL,
             headers=HEADERS,
-            json={"inputs": text, "options": {"wait_for_model": True}}
+            json={"inputs": text},
+            timeout=60
         )
 
         if response.status_code == 200:
@@ -108,7 +113,7 @@ except (ImportError, Exception) as e:
             if embedding.ndim > 1:
                 embedding = embedding.mean(axis=0)
             return embedding.astype(np.float32)
-        elif response.status_code == 503 and retry_count < 2:
+        elif response.status_code == 503 and retry_count < 3:
             # Model is loading - wait and retry
             wait_time = 20 * (retry_count + 1)
             print(f"   ⏳ Model loading, waiting {wait_time} seconds...")
