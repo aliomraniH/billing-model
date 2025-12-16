@@ -303,6 +303,19 @@ pip install \
 
 > 📌 **Pinecone package update:** The official client is now published as `pinecone`. Uninstall any `pinecone-client` dependency to avoid import errors. Notebooks 05/06 will auto-install `pinecone` if it's missing, but it's best to install it once up front.
 
+> 🤗 **Hugging Face client:** If you hit `ModuleNotFoundError: No module named 'huggingface_hub'`, install it once with `pip install -U huggingface_hub`. The notebooks also auto-install it when missing.
+
+**Using a different embedding model?**
+
+Set these environment variables so Pinecone dimensions stay aligned with your chosen model, and optionally pass `model_id` into the search helpers:
+
+```bash
+export HF_EMBEDDING_MODEL="your/model"
+export HF_EMBEDDING_DIM=768  # must match the Pinecone index dimension
+```
+
+Both `search_similar_notes(...)` (Notebook 05) and `search_by_category(...)` (Notebook 06) accept an optional `model_id` argument for experimentation.
+
 **Note**: No PyTorch required! All embeddings generated via serverless API.
 
 ---
