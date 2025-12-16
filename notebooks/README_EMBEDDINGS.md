@@ -352,6 +352,52 @@ NotFoundError: model not found
 ```
 **Solution**: Update to `claude-sonnet-4-5-20250929`.
 
+### NumPy/TensorFlow Dependency Conflict ⚠️ IMPORTANT
+```
+ERROR: tensorflow 2.15.1 requires numpy<2.0.0,>=1.23.5, but you have numpy 2.2.6
+```
+
+**Cause**: Notebook 04 (autotrain-advanced) installs TensorFlow 2.15.x, which requires numpy<2.0. If another package upgraded numpy to 2.x, there's a conflict.
+
+**Impact on Notebook 05/06**:
+- ✅ **LOW RISK**: Notebooks 05 & 06 don't use TensorFlow
+- ⚠️ **BUT**: Could cause import errors if TensorFlow is loaded implicitly
+
+**Solutions** (choose one):
+
+**Option 1: Run the fix script** (Recommended)
+```python
+# In your notebook environment, run:
+%run notebooks/00_fix_dependencies.py
+
+# Or via pip:
+pip install numpy==1.26.4 --force-reinstall --no-deps
+```
+
+**Option 2: Use requirements file**
+```bash
+pip install -r notebooks/requirements_notebook_05_06.txt
+```
+
+**Option 3: Fresh environment** (Best for production)
+```bash
+# Create new virtual environment for notebooks 05/06
+python -m venv venv_embeddings
+source venv_embeddings/bin/activate
+pip install -r notebooks/requirements_notebook_05_06.txt
+```
+
+**Option 4: Skip notebook 04**
+- If you don't need AutoTrain (notebook 04), skip it entirely
+- Notebooks 05 & 06 are independent and don't require notebook 04
+- Just ensure notebooks 01-02 (database setup) are complete
+
+**Verification**:
+```python
+import numpy
+print(f"NumPy version: {numpy.__version__}")  # Should be 1.26.4
+```
+
 ---
 
 ## Performance

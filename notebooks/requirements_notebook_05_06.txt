@@ -1,0 +1,21 @@
+# Requirements for Notebooks 05 & 06 (Embeddings & Clustering)
+# Compatible with TensorFlow 2.15.x (if you've run notebook 04)
+
+# Core dependencies
+numpy==1.26.4  # Compatible with TensorFlow 2.15.x AND modern packages
+pandas>=2.0.0,<3.0.0
+scikit-learn>=1.3.0  # Required for sklearn.cluster.HDBSCAN
+
+# Database
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+
+# Vector DB & Embeddings
+pinecone-client>=3.0.0
+huggingface-hub>=0.20.0
+
+# LLM (optional for notebook 06)
+anthropic>=0.40.0  # For Claude 4.5 Sonnet cluster labeling
+
+# Note: If you get TensorFlow conflicts, run:
+# pip install -r requirements_notebook_05_06.txt --force-reinstall
