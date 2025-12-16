@@ -59,10 +59,8 @@ try:
 
     if HF_TOKEN:
         print("✅ Using Hugging Face Serverless Inference API (authenticated)")
-        client = InferenceClient(
-            provider="hf-inference",
-            api_key=HF_TOKEN
-        )
+        # Simplified client initialization - library handles endpoint routing
+        client = InferenceClient(token=HF_TOKEN)
 
         def get_embedding(text: str) -> np.ndarray:
             """Generate embedding using HF Serverless API with authentication"""
@@ -88,7 +86,8 @@ except (ImportError, Exception) as e:
     import requests
     import time
 
-    API_URL = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{MODEL_ID}"
+    # Updated API endpoint (api-inference.huggingface.co is deprecated as of 2025)
+    API_URL = f"https://api-inference.huggingface.co/models/{MODEL_ID}"
 
     if HF_TOKEN:
         HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"}
