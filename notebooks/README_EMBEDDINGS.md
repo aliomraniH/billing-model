@@ -294,12 +294,27 @@ Install required packages:
 ```bash
 pip install \
     huggingface_hub \
-    pinecone-client \
+    pinecone \
     anthropic \
     numpy pandas \
     sqlalchemy psycopg2-binary \
     scikit-learn>=1.3
 ```
+
+> 📌 **Pinecone package update:** The official client is now published as `pinecone`. Uninstall any `pinecone-client` dependency to avoid import errors. Notebooks 05/06 will auto-install `pinecone` if it's missing, but it's best to install it once up front.
+
+> 🤗 **Hugging Face client:** If you hit `ModuleNotFoundError: No module named 'huggingface_hub'`, install it once with `pip install -U huggingface_hub`. The notebooks also auto-install it when missing.
+
+**Using a different embedding model?**
+
+Set these environment variables so Pinecone dimensions stay aligned with your chosen model, and optionally pass `model_id` into the search helpers:
+
+```bash
+export HF_EMBEDDING_MODEL="your/model"
+export HF_EMBEDDING_DIM=768  # must match the Pinecone index dimension
+```
+
+Both `search_similar_notes(...)` (Notebook 05) and `search_by_category(...)` (Notebook 06) accept an optional `model_id` argument for experimentation.
 
 **Note**: No PyTorch required! All embeddings generated via serverless API.
 
@@ -327,6 +342,18 @@ If you were using the old notebooks with pgvector:
 Error: Index 'medical-billing-notes' not found
 ```
 **Solution**: Notebook 05 auto-creates the index. Wait 10 seconds after creation.
+
+### Pinecone package rename error
+```
+Exception: The official Pinecone python package has been renamed from `pinecone-client` to `pinecone`.
+```
+**Solution (recommended before running notebooks):** Remove the legacy dependency and install the new one:
+```bash
+pip uninstall -y pinecone-client
+pip install -U pinecone
+```
+
+**Auto-fix fallback:** Notebooks 05/06 will automatically uninstall `pinecone-client` (if present) and install the `pinecone` package at runtime when the import is missing.
 
 ### HuggingFace 410 Error
 ```

@@ -16,10 +16,20 @@ print("✅ HF API: router.huggingface.co (December 2025)")
 print("=" * 70 + "\n")
 
 # ============================================================
+# INSTALL DEPENDENCIES (use new pinecone package)
+# ============================================================
+# ⚠️ Pinecone client rename: uninstall legacy `pinecone-client`
+# !pip uninstall -y pinecone-client
+# Then install required packages (minimal, no torch needed)
+# !pip install -q huggingface_hub pinecone numpy pandas sqlalchemy psycopg2-binary requests
+
+# ============================================================
 # IMPORTS
 # ============================================================
 import os
 import time
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 from sqlalchemy import create_engine, text
@@ -32,8 +42,9 @@ HF_TOKEN = os.getenv('HF_TOKEN')
 PINECONE_API_KEY = os.getenv('PINECONE_API_KEY')
 
 # CRITICAL: Use a model that works with feature_extraction on HF Inference
-MODEL_ID = "BAAI/bge-small-en-v1.5"
-EMBEDDING_DIM = 384
+# Allow override for different architectures/datasets
+MODEL_ID = os.getenv("HF_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+EMBEDDING_DIM = int(os.getenv("HF_EMBEDDING_DIM", 384))
 PINECONE_INDEX = "medical-billing-notes"
 
 # Validate
@@ -69,6 +80,16 @@ with engine.connect() as conn:
 # ============================================================
 print("\n🌲 Initializing Pinecone...")
 
+# Auto-install the renamed Pinecone client if it's missing (avoids ModuleNotFoundError)
+import importlib.util
+import subprocess
+import sys
+
+if importlib.util.find_spec("pinecone") is None:
+    print("   📦 Installing Pinecone client (renamed from `pinecone-client`)...")
+    subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y", "pinecone-client"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "pinecone"])
+
 from pinecone import Pinecone, ServerlessSpec
 
 pc = Pinecone(api_key=PINECONE_API_KEY)
@@ -103,8 +124,20 @@ print(f"   Vectors in index: {stats.total_vector_count:,}")
 print(f"\n🤗 Setting up HuggingFace embeddings...")
 print(f"   Model: {MODEL_ID}")
 print(f"   Dimensions: {EMBEDDING_DIM}")
+# Ensure huggingface_hub is present (avoids ModuleNotFoundError)
+if importlib.util.find_spec("huggingface_hub") is None:
+    print("   📦 Installing huggingface_hub (needed for InferenceClient)...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "huggingface_hub"])
 
-from huggingface_hub import InferenceClient
+from huggingface_hub import HfApi, InferenceClient
+
+# Optional: verify the model is available before making inference calls
+try:
+    info = HfApi(token=HF_TOKEN).model_info(MODEL_ID)
+    pipeline = getattr(info, "pipeline_tag", None)
+    print(f"   ✅ Model available (pipeline: {pipeline or 'unknown'})")
+except Exception as exc:
+    print(f"   ⚠️ Could not verify model availability ({exc}). Ensure the model supports feature extraction.")
 
 # NEW 2025 API: Must use provider="hf-inference"
 hf_client = InferenceClient(
@@ -112,17 +145,26 @@ hf_client = InferenceClient(
     api_key=HF_TOKEN,
 )
 
-def get_embedding(text: str) -> np.ndarray:
+def get_embedding(text: str, model_id: Optional[str] = None) -> np.ndarray:
     """Generate embedding using HF Inference API (December 2025)"""
+    model_to_use = model_id or MODEL_ID
     result = hf_client.feature_extraction(
         text,
-        model=MODEL_ID
+        model=model_to_use
     )
     embedding = np.array(result)
     # Mean pooling if token-level embeddings returned
     if embedding.ndim > 1:
         embedding = embedding.mean(axis=0)
-    return embedding.astype(np.float32)
+    embedding = embedding.astype(np.float32)
+
+    if embedding.shape[0] != EMBEDDING_DIM:
+        raise ValueError(
+            f"Embedding dimension {embedding.shape[0]} does not match expected {EMBEDDING_DIM}. "
+            "Update EMBEDDING_DIM/Pinecone index or choose a compatible model."
+        )
+
+    return embedding
 
 # Test embedding
 print("\n🧪 Testing embedding generation...")
@@ -260,7 +302,12 @@ print(f"   ✅ Uploaded {len(pinecone_vectors)} vectors to Pinecone")
 # ============================================================
 # SIMILARITY SEARCH FUNCTION
 # ============================================================
-def search_similar_notes(query: str, top_k: int = 5, category_filter: str = None) -> pd.DataFrame:
+def search_similar_notes(
+    query: str,
+    top_k: int = 5,
+    category_filter: Optional[str] = None,
+    model_id: Optional[str] = None,
+) -> pd.DataFrame:
     """
     Search for similar clinical notes using Pinecone.
 
@@ -273,7 +320,7 @@ def search_similar_notes(query: str, top_k: int = 5, category_filter: str = None
         DataFrame with matching notes and similarity scores
     """
     # Generate query embedding
-    query_embedding = get_embedding(query)
+    query_embedding = get_embedding(query, model_id=model_id)
 
     # Build filter
     filter_dict = None
@@ -342,14 +389,19 @@ CODE_DESCRIPTIONS = {
     'K80.20': 'Calculus of gallbladder without cholecystitis',
 }
 
-def validate_billing_code(claim_id: int, icd_code: str, threshold: float = 0.35) -> dict:
+def validate_billing_code(
+    claim_id: int,
+    icd_code: str,
+    threshold: float = 0.35,
+    model_id: Optional[str] = None,
+) -> dict:
     """
     Validate if a billing code matches the clinical documentation.
 
     Uses semantic similarity between code description and clinical notes.
     """
     code_desc = CODE_DESCRIPTIONS.get(icd_code, f'ICD-10 code {icd_code}')
-    code_emb = get_embedding(code_desc)
+    code_emb = get_embedding(code_desc, model_id=model_id)
 
     # Search Pinecone for this claim's notes
     results = index.query(

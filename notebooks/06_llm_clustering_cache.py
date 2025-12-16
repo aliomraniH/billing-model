@@ -17,11 +17,21 @@ print("✅ Claude API: claude-sonnet-4-5-20250929")
 print("=" * 70 + "\n")
 
 # ============================================================
+# INSTALL DEPENDENCIES (use new pinecone package)
+# ============================================================
+# ⚠️ Pinecone client rename: uninstall legacy `pinecone-client`
+# !pip uninstall -y pinecone-client
+# Then install required packages (no local torch needed)
+# !pip install -q huggingface_hub pinecone anthropic numpy pandas sqlalchemy psycopg2-binary requests scikit-learn
+
+# ============================================================
 # IMPORTS
 # ============================================================
 import os
 import json
 import time
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 from sqlalchemy import create_engine, text
@@ -34,14 +44,15 @@ HF_TOKEN = os.getenv('HF_TOKEN')
 PINECONE_API_KEY = os.getenv('PINECONE_API_KEY')
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
 
-MODEL_ID = "BAAI/bge-small-en-v1.5"
-EMBEDDING_DIM = 384
+MODEL_ID = os.getenv("HF_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+EMBEDDING_DIM = int(os.getenv("HF_EMBEDDING_DIM", 384))
 PINECONE_INDEX = "medical-billing-notes"
 
 # Validate
 missing = []
 if not DATABASE_URL: missing.append("VERCEL_POSTGRES_URL")
 if not PINECONE_API_KEY: missing.append("PINECONE_API_KEY")
+if not HF_TOKEN: missing.append("HF_TOKEN")
 if missing:
     raise ValueError(f"Missing required: {', '.join(missing)}")
 
@@ -63,6 +74,16 @@ with engine.connect() as conn:
     print(f"   ✅ Postgres: {result.fetchone()[0]:,} claims")
 
 # Pinecone
+# Auto-install the renamed Pinecone client if it's missing (avoids ModuleNotFoundError)
+import importlib.util
+import subprocess
+import sys
+
+if importlib.util.find_spec("pinecone") is None:
+    print("   📦 Installing Pinecone client (renamed from `pinecone-client`)...")
+    subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y", "pinecone-client"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "pinecone"])
+
 from pinecone import Pinecone
 pc = Pinecone(api_key=PINECONE_API_KEY)
 index = pc.Index(PINECONE_INDEX)
@@ -70,12 +91,24 @@ stats = index.describe_index_stats()
 print(f"   ✅ Pinecone: {stats.total_vector_count:,} vectors")
 
 # HuggingFace
-from huggingface_hub import InferenceClient
+# Ensure huggingface_hub is present (avoids ModuleNotFoundError)
+if importlib.util.find_spec("huggingface_hub") is None:
+    print("   📦 Installing huggingface_hub (needed for InferenceClient)...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "huggingface_hub"])
+
+from huggingface_hub import HfApi, InferenceClient
+
+try:
+    info = HfApi(token=HF_TOKEN).model_info(MODEL_ID)
+    pipeline = getattr(info, "pipeline_tag", None)
+    print(f"   ✅ HuggingFace: {MODEL_ID} (pipeline: {pipeline or 'unknown'})")
+except Exception as exc:
+    print(f"   ⚠️ Could not verify model availability ({exc}). Ensure the model supports feature extraction.")
+
 hf_client = InferenceClient(
     provider="hf-inference",
     api_key=HF_TOKEN,
 ) if HF_TOKEN else None
-print(f"   ✅ HuggingFace: {MODEL_ID}")
 
 # Anthropic
 anthropic_client = None
@@ -87,15 +120,25 @@ if ANTHROPIC_API_KEY:
 # ============================================================
 # HELPER FUNCTIONS
 # ============================================================
-def get_embedding(text: str) -> np.ndarray:
+def get_embedding(text: str, model_id: Optional[str] = None) -> np.ndarray:
     """Generate embedding using HF Inference API"""
     if not hf_client:
         raise ValueError("HF_TOKEN required for embeddings")
-    result = hf_client.feature_extraction(text, model=MODEL_ID)
+
+    model_to_use = model_id or MODEL_ID
+    result = hf_client.feature_extraction(text, model=model_to_use)
     embedding = np.array(result)
     if embedding.ndim > 1:
         embedding = embedding.mean(axis=0)
-    return embedding.astype(np.float32)
+    embedding = embedding.astype(np.float32)
+
+    if embedding.shape[0] != EMBEDDING_DIM:
+        raise ValueError(
+            f"Embedding dimension {embedding.shape[0]} does not match expected {EMBEDDING_DIM}. "
+            "Update EMBEDDING_DIM/Pinecone index or choose a compatible model."
+        )
+
+    return embedding
 
 # ============================================================
 # LOAD ALL VECTORS FROM PINECONE
@@ -350,11 +393,16 @@ print("   ✅ Claims assigned to categories")
 # ============================================================
 # CATEGORY SEARCH FUNCTION
 # ============================================================
-def search_by_category(query: str, category_name: str = None, top_k: int = 5) -> pd.DataFrame:
+def search_by_category(
+    query: str,
+    category_name: Optional[str] = None,
+    top_k: int = 5,
+    model_id: Optional[str] = None,
+) -> pd.DataFrame:
     """
     Search for similar claims, optionally filtered by category.
     """
-    query_emb = get_embedding(query)
+    query_emb = get_embedding(query, model_id=model_id)
 
     # Build filter
     filter_dict = None
@@ -380,11 +428,15 @@ def search_by_category(query: str, category_name: str = None, top_k: int = 5) ->
 
     return pd.DataFrame(rows)
 
-def auto_categorize_claim(claim_id: int, note_text: str) -> dict:
+def auto_categorize_claim(
+    claim_id: int,
+    note_text: str,
+    model_id: Optional[str] = None,
+) -> dict:
     """
     Automatically categorize a new claim based on its clinical note.
     """
-    note_emb = get_embedding(note_text)
+    note_emb = get_embedding(note_text, model_id=model_id)
 
     # Find best matching category by comparing to centroids
     best_cat = None
