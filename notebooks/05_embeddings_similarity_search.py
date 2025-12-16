@@ -77,7 +77,13 @@ with engine.connect() as conn:
 # ============================================================
 print("\n🌲 Initializing Pinecone...")
 
-from pinecone import Pinecone, ServerlessSpec
+try:
+    from pinecone import Pinecone, ServerlessSpec
+except ImportError as exc:
+    raise ImportError(
+        "Pinecone client not installed. Please uninstall legacy `pinecone-client` "
+        "and install the renamed `pinecone` package (see https://github.com/pinecone-io/pinecone-python-client)."
+    ) from exc
 
 pc = Pinecone(api_key=PINECONE_API_KEY)
 

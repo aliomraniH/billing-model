@@ -330,6 +330,16 @@ Error: Index 'medical-billing-notes' not found
 ```
 **Solution**: Notebook 05 auto-creates the index. Wait 10 seconds after creation.
 
+### Pinecone package rename error
+```
+Exception: The official Pinecone python package has been renamed from `pinecone-client` to `pinecone`.
+```
+**Solution**: Remove the legacy dependency and install the new one:
+```bash
+pip uninstall -y pinecone-client
+pip install pinecone
+```
+
 ### HuggingFace 410 Error
 ```
 HTTP Error 410: Gone
