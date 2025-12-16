@@ -1,668 +1,456 @@
-# Medical Billing ML - Notebook 6: LLM Clustering & Category Cache
-# Prerequisites: Run notebooks 01, 02, 05 first
-# This notebook uses Claude API to intelligently cluster claims and create category-specific cache tables
+"""
+Medical Billing ML - Notebook 6: LLM-Powered Clustering & Category Cache
+Architecture: Vercel Postgres (data) + Pinecone (vectors) + Claude (LLM)
 
-#=============================================================================
-# DEPENDENCIES & SETUP
-#=============================================================================
+This notebook:
+1. Loads embeddings from Pinecone
+2. Clusters using HDBSCAN (sklearn 1.3+)
+3. Uses Claude to label clusters
+4. Creates category tables for fast search
+"""
 
-print("📦 Installing dependencies...")
-import subprocess
-import sys
+print("=" * 70)
+print("🤖 MEDICAL BILLING ML - LLM CLUSTERING & CATEGORY CACHE")
+print("=" * 70)
+print("✅ Using sklearn HDBSCAN (v1.3+)")
+print("✅ Claude API: claude-sonnet-4-5-20250929")
+print("=" * 70 + "\n")
 
-# Install required packages
-subprocess.check_call([sys.executable, "-m", "pip", "install", "-q",
-                      "anthropic", "scikit-learn>=1.3", "sentence-transformers"])
-
+# ============================================================
+# IMPORTS
+# ============================================================
 import os
 import json
+import time
 import numpy as np
 import pandas as pd
 from sqlalchemy import create_engine, text
-from sentence_transformers import SentenceTransformer
-from sklearn.cluster import HDBSCAN, KMeans
-from anthropic import Anthropic
 
-print("✅ Dependencies installed successfully")
-
-#=============================================================================
-# DATABASE CONNECTION
-#=============================================================================
-
-print("\n🔗 Connecting to database...")
+# ============================================================
+# CONFIGURATION
+# ============================================================
 DATABASE_URL = os.getenv('VERCEL_POSTGRES_URL')
-if not DATABASE_URL:
-    raise ValueError("❌ VERCEL_POSTGRES_URL not found! Add it to Project Settings → Environment Variables")
-
-engine = create_engine(DATABASE_URL)
-
-# Test connection and verify clinical_notes table
-try:
-    with engine.connect() as connection:
-        result = connection.execute(text("SELECT COUNT(*) FROM clinical_notes WHERE embedding IS NOT NULL"))
-        notes_count = result.fetchone()[0]
-        print(f"✅ Connected! Found {notes_count:,} clinical notes with embeddings")
-
-        if notes_count == 0:
-            raise ValueError("❌ No embeddings found! Run notebook 05 first to generate embeddings")
-except Exception as e:
-    print(f"❌ Connection or table check failed: {e}")
-    raise
-
-#=============================================================================
-# LOAD EMBEDDING MODEL
-#=============================================================================
-
-print("\n📥 Loading embedding model...")
-embed_model = SentenceTransformer('all-MiniLM-L6-v2')
-embedding_dim = embed_model.get_sentence_embedding_dimension()
-print(f"✅ Model loaded: all-MiniLM-L6-v2 ({embedding_dim} dimensions)")
-
-#=============================================================================
-# LOAD EMBEDDINGS FROM DATABASE
-#=============================================================================
-
-print("\n📊 Loading embeddings from database...")
-embeddings_df = pd.read_sql(text("""
-    SELECT
-        note_id,
-        claim_id,
-        note_type,
-        note_text,
-        embedding
-    FROM clinical_notes
-    WHERE embedding IS NOT NULL
-"""), engine)
-
-print(f"✅ Loaded {len(embeddings_df):,} embeddings")
-
-# Convert pgvector embeddings to numpy array
-def pgvector_to_array(pgvector_str):
-    """Convert pgvector string '[1,2,3]' to numpy array"""
-    if isinstance(pgvector_str, str):
-        # Remove brackets and parse
-        return np.array([float(x) for x in pgvector_str.strip('[]').split(',')])
-    return pgvector_str
-
-embeddings_matrix = np.vstack([pgvector_to_array(emb) for emb in embeddings_df['embedding']])
-print(f"   Embedding matrix shape: {embeddings_matrix.shape}")
-
-#=============================================================================
-# CLUSTERING WITH HDBSCAN
-#=============================================================================
-
-print("\n🔬 Performing HDBSCAN clustering...")
-print("   Parameters: min_cluster_size=3, cluster_selection_method='eom'")
-
-# Use sklearn's built-in HDBSCAN with store_centers to get centroids
-clusterer = HDBSCAN(
-    min_cluster_size=3,
-    min_samples=None,  # Defaults to min_cluster_size
-    metric='euclidean',
-    cluster_selection_method='eom',
-    store_centers='centroid'  # This stores cluster centroids
-)
-
-cluster_labels = clusterer.fit_predict(embeddings_matrix)
-embeddings_df['cluster_label'] = cluster_labels
-
-# Count clusters (excluding noise points labeled -1)
-unique_clusters = [c for c in np.unique(cluster_labels) if c != -1]
-noise_count = np.sum(cluster_labels == -1)
-
-print(f"✅ Clustering complete!")
-print(f"   Found {len(unique_clusters)} clusters")
-print(f"   Noise points: {noise_count}")
-
-# Fallback to KMeans if too few clusters
-if len(unique_clusters) < 3:
-    print("\n⚠️  Too few clusters found, falling back to KMeans with k=5...")
-    kmeans = KMeans(n_clusters=5, random_state=42, n_init=10)
-    cluster_labels = kmeans.fit_predict(embeddings_matrix)
-    embeddings_df['cluster_label'] = cluster_labels
-    unique_clusters = list(range(5))
-    # Calculate centroids manually
-    centroids = kmeans.cluster_centers_
-    print(f"✅ KMeans clustering complete! Created {len(unique_clusters)} clusters")
-else:
-    # Get centroids from HDBSCAN
-    centroids = clusterer.centroids_
-
-# Display cluster distribution
-print("\n📈 Cluster distribution:")
-for cluster_id in sorted(unique_clusters):
-    count = np.sum(cluster_labels == cluster_id)
-    print(f"   Cluster {cluster_id}: {count} notes")
-
-#=============================================================================
-# LLM-BASED CLUSTER LABELING WITH ANTHROPIC API
-#=============================================================================
-
-print("\n🤖 Initializing Claude API for cluster labeling...")
+HF_TOKEN = os.getenv('HF_TOKEN')
+PINECONE_API_KEY = os.getenv('PINECONE_API_KEY')
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
 
-if not ANTHROPIC_API_KEY:
-    print("⚠️  ANTHROPIC_API_KEY not found! Using generic category names.")
-    use_llm = False
-else:
-    try:
-        client = Anthropic()  # Uses ANTHROPIC_API_KEY env var
-        print("✅ Claude API initialized")
-        use_llm = True
-    except Exception as e:
-        print(f"⚠️  Failed to initialize Claude API: {e}")
-        print("   Falling back to generic category names")
-        use_llm = False
+MODEL_ID = "BAAI/bge-small-en-v1.5"
+EMBEDDING_DIM = 384
+PINECONE_INDEX = "medical-billing-notes"
 
-def label_cluster_with_llm(sample_notes: list, cluster_id: int) -> dict:
-    """Use Claude to analyze cluster and generate category metadata"""
-    if not use_llm:
+# Validate
+missing = []
+if not DATABASE_URL: missing.append("VERCEL_POSTGRES_URL")
+if not PINECONE_API_KEY: missing.append("PINECONE_API_KEY")
+if missing:
+    raise ValueError(f"Missing required: {', '.join(missing)}")
+
+# ANTHROPIC_API_KEY is optional - will use generic names if missing
+if not ANTHROPIC_API_KEY:
+    print("⚠️ ANTHROPIC_API_KEY not set - will use generic category names")
+
+print("✅ Environment validated")
+
+# ============================================================
+# INITIALIZE CLIENTS
+# ============================================================
+print("\n🔌 Initializing connections...")
+
+# Database
+engine = create_engine(DATABASE_URL)
+with engine.connect() as conn:
+    result = conn.execute(text("SELECT COUNT(*) FROM claims"))
+    print(f"   ✅ Postgres: {result.fetchone()[0]:,} claims")
+
+# Pinecone
+from pinecone import Pinecone
+pc = Pinecone(api_key=PINECONE_API_KEY)
+index = pc.Index(PINECONE_INDEX)
+stats = index.describe_index_stats()
+print(f"   ✅ Pinecone: {stats.total_vector_count:,} vectors")
+
+# HuggingFace
+from huggingface_hub import InferenceClient
+hf_client = InferenceClient(
+    provider="hf-inference",
+    api_key=HF_TOKEN,
+) if HF_TOKEN else None
+print(f"   ✅ HuggingFace: {MODEL_ID}")
+
+# Anthropic
+anthropic_client = None
+if ANTHROPIC_API_KEY:
+    from anthropic import Anthropic
+    anthropic_client = Anthropic()
+    print("   ✅ Anthropic: claude-sonnet-4-5-20250929")
+
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+def get_embedding(text: str) -> np.ndarray:
+    """Generate embedding using HF Inference API"""
+    if not hf_client:
+        raise ValueError("HF_TOKEN required for embeddings")
+    result = hf_client.feature_extraction(text, model=MODEL_ID)
+    embedding = np.array(result)
+    if embedding.ndim > 1:
+        embedding = embedding.mean(axis=0)
+    return embedding.astype(np.float32)
+
+# ============================================================
+# LOAD ALL VECTORS FROM PINECONE
+# ============================================================
+print("\n📥 Loading vectors from Pinecone...")
+
+# Fetch all vectors (for small datasets)
+# For large datasets, use pagination with index.list()
+all_vectors = []
+all_metadata = []
+all_ids = []
+
+# Query with a random vector to get all results (hacky but works for small datasets)
+# Better approach: iterate through known IDs
+results = index.query(
+    vector=[0.0] * EMBEDDING_DIM,  # Dummy vector
+    top_k=10000,  # Max allowed
+    include_values=True,
+    include_metadata=True
+)
+
+for match in results.matches:
+    all_ids.append(match.id)
+    all_vectors.append(match.values)
+    all_metadata.append(match.metadata)
+
+X = np.array(all_vectors)
+print(f"   ✅ Loaded {len(X)} vectors, shape: {X.shape}")
+
+# ============================================================
+# CLUSTERING WITH HDBSCAN (sklearn 1.3+)
+# ============================================================
+print("\n🔬 Clustering with HDBSCAN...")
+
+from sklearn.cluster import HDBSCAN
+
+# IMPORTANT: Use sklearn's HDBSCAN, not the old standalone package
+clusterer = HDBSCAN(
+    min_cluster_size=2,  # Small for demo data
+    min_samples=1,
+    metric='euclidean',
+    cluster_selection_method='eom',
+    store_centers='centroid',  # NEW in sklearn - stores cluster centroids!
+)
+
+cluster_labels = clusterer.fit_predict(X)
+unique_labels = set(cluster_labels)
+n_clusters = len(unique_labels) - (1 if -1 in unique_labels else 0)
+n_noise = list(cluster_labels).count(-1)
+
+print(f"   ✅ Found {n_clusters} clusters")
+print(f"   ⚠️ Noise points: {n_noise}")
+
+# Get centroids (only available with store_centers='centroid')
+if hasattr(clusterer, 'centroids_') and clusterer.centroids_ is not None:
+    centroids = clusterer.centroids_
+    print(f"   ✅ Centroids shape: {centroids.shape}")
+else:
+    # Calculate manually if not available
+    centroids = []
+    for label in range(n_clusters):
+        mask = cluster_labels == label
+        centroid = X[mask].mean(axis=0)
+        centroids.append(centroid)
+    centroids = np.array(centroids)
+    print(f"   ✅ Calculated {len(centroids)} centroids")
+
+# Fallback to KMeans if too few clusters
+if n_clusters < 3:
+    print("\n⚠️ HDBSCAN found too few clusters, falling back to KMeans...")
+    from sklearn.cluster import KMeans
+
+    kmeans = KMeans(n_clusters=5, random_state=42, n_init=10)
+    cluster_labels = kmeans.fit_predict(X)
+    centroids = kmeans.cluster_centers_
+    n_clusters = 5
+    print(f"   ✅ KMeans: {n_clusters} clusters")
+
+# ============================================================
+# LLM CLUSTER LABELING
+# ============================================================
+print("\n🤖 Labeling clusters with LLM...")
+
+def label_cluster_with_llm(sample_notes: list, cluster_idx: int) -> dict:
+    """Use Claude to generate category name and description"""
+    if not anthropic_client:
         return {
-            'category_name': f'category_{cluster_id}',
-            'display_name': f'Category {cluster_id}',
-            'description': f'Auto-generated category for cluster {cluster_id}'
+            "category_name": f"category_{cluster_idx}",
+            "display_name": f"Category {cluster_idx}",
+            "description": f"Auto-generated cluster {cluster_idx}"
         }
 
-    try:
-        notes_text = "\n---\n".join(sample_notes[:5])  # Limit to 5 notes
+    notes_text = "\n---\n".join(sample_notes[:5])  # Max 5 samples
 
-        message = client.messages.create(
+    try:
+        message = anthropic_client.messages.create(
             model="claude-sonnet-4-5-20250929",
             max_tokens=500,
-            system="You are a medical coding expert. Analyze clinical notes and categorize them concisely.",
+            system="You are a medical coding expert. Analyze clinical notes and categorize them. Respond with ONLY valid JSON, no markdown.",
             messages=[{
                 "role": "user",
                 "content": f"""Analyze these clinical notes and provide a category.
 
-Clinical Notes:
+Notes:
 {notes_text}
 
-Respond with ONLY valid JSON (no markdown, no explanation):
+Respond with ONLY this JSON structure:
 {{"category_name": "snake_case_name", "display_name": "Human Readable Name", "description": "Brief 1-2 sentence description"}}"""
             }]
         )
 
-        # Parse response
         response_text = message.content[0].text.strip()
-        # Remove markdown code blocks if present
-        if response_text.startswith('```'):
-            response_text = response_text.split('\n', 1)[1].rsplit('\n```', 1)[0]
+        # Clean potential markdown
+        if response_text.startswith("```"):
+            response_text = response_text.split("```")[1]
+            if response_text.startswith("json"):
+                response_text = response_text[4:]
 
-        result = json.loads(response_text)
-        print(f"   ✅ Cluster {cluster_id}: {result['display_name']}")
-        return result
+        return json.loads(response_text)
 
     except Exception as e:
-        print(f"   ⚠️  LLM labeling failed for cluster {cluster_id}: {e}")
+        print(f"   ⚠️ LLM error: {e}")
         return {
-            'category_name': f'category_{cluster_id}',
-            'display_name': f'Category {cluster_id}',
-            'description': f'Auto-generated category for cluster {cluster_id}'
+            "category_name": f"category_{cluster_idx}",
+            "display_name": f"Category {cluster_idx}",
+            "description": f"Medical claims cluster {cluster_idx}"
         }
 
-print("\n🏷️  Generating category labels...")
+# Label each cluster
 categories = []
+for cluster_idx in range(n_clusters):
+    print(f"   [{cluster_idx + 1}/{n_clusters}] Labeling cluster {cluster_idx}... ", end="", flush=True)
 
-for cluster_id in sorted(unique_clusters):
-    # Get sample notes closest to centroid
-    cluster_mask = cluster_labels == cluster_id
-    cluster_indices = np.where(cluster_mask)[0]
+    # Get sample notes for this cluster
+    mask = cluster_labels == cluster_idx
+    cluster_indices = np.where(mask)[0]
 
-    if len(cluster_indices) == 0:
-        continue
+    sample_notes = []
+    for idx in cluster_indices[:5]:
+        meta = all_metadata[idx]
+        sample_notes.append(meta.get('text_preview', ''))
 
-    # Get centroid for this cluster
-    centroid = centroids[cluster_id]
+    # Get LLM label
+    label_info = label_cluster_with_llm(sample_notes, cluster_idx)
+    label_info['cluster_idx'] = cluster_idx
+    label_info['size'] = int(mask.sum())
+    label_info['centroid'] = centroids[cluster_idx].tolist()
 
-    # Calculate distances to centroid
-    cluster_embeddings = embeddings_matrix[cluster_indices]
-    distances = np.linalg.norm(cluster_embeddings - centroid, axis=1)
+    categories.append(label_info)
+    print(f"'{label_info['display_name']}' ({label_info['size']} items)")
 
-    # Get top 5 closest notes
-    closest_indices = cluster_indices[np.argsort(distances)[:5]]
-    sample_notes = embeddings_df.iloc[closest_indices]['note_text'].tolist()
+print(f"\n✅ Labeled {len(categories)} categories")
 
-    # Generate category metadata using LLM
-    category_info = label_cluster_with_llm(sample_notes, cluster_id)
-    category_info['cluster_id'] = cluster_id
-    category_info['centroid'] = centroid
-    category_info['sample_size'] = len(cluster_indices)
-
-    categories.append(category_info)
-
-print(f"\n✅ Generated {len(categories)} category labels")
-
-#=============================================================================
-# CREATE DATABASE SCHEMA
-#=============================================================================
-
-print("\n💾 Creating database tables...")
+# ============================================================
+# CREATE DATABASE TABLES
+# ============================================================
+print("\n📋 Creating database tables...")
 
 with engine.begin() as conn:
-    # Create master category table
+    # Master category table
     conn.execute(text("""
         CREATE TABLE IF NOT EXISTS claim_categories (
             category_id SERIAL PRIMARY KEY,
             category_name VARCHAR(100) UNIQUE NOT NULL,
             display_name VARCHAR(200),
             description TEXT,
-            centroid_embedding VECTOR(384),
+            centroid_json TEXT,
             claim_count INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT NOW()
         )
     """))
-    print("   ✅ Created claim_categories table")
+    print("   ✅ claim_categories table")
 
-    # Create category membership mapping
+    # Category membership mapping
     conn.execute(text("""
         CREATE TABLE IF NOT EXISTS claim_category_membership (
             membership_id BIGSERIAL PRIMARY KEY,
-            claim_id BIGINT REFERENCES claims(claim_id),
+            claim_id BIGINT,
             category_id INTEGER REFERENCES claim_categories(category_id),
             similarity_score FLOAT,
             assigned_at TIMESTAMP DEFAULT NOW(),
             UNIQUE(claim_id, category_id)
         )
     """))
-    print("   ✅ Created claim_category_membership table")
+    print("   ✅ claim_category_membership table")
 
-    # Create HNSW index on category centroids
-    try:
-        conn.execute(text("""
-            CREATE INDEX IF NOT EXISTS idx_categories_centroid
-            ON claim_categories USING hnsw (centroid_embedding vector_cosine_ops)
-        """))
-        print("   ✅ Created HNSW index on category centroids")
-    except Exception as e:
-        print(f"   ⚠️  Could not create HNSW index (may need pgvector extension): {e}")
+    # Clear existing categories (for re-runs)
+    conn.execute(text("DELETE FROM claim_category_membership"))
+    conn.execute(text("DELETE FROM claim_categories"))
 
-print("✅ Database schema created successfully")
-
-#=============================================================================
-# INSERT CATEGORIES INTO DATABASE
-#=============================================================================
-
-print("\n📥 Inserting categories into database...")
+# ============================================================
+# POPULATE CATEGORIES
+# ============================================================
+print("\n📊 Populating categories...")
 
 with engine.begin() as conn:
-    # Clear existing categories (for idempotency)
-    conn.execute(text("TRUNCATE claim_categories CASCADE"))
-
     for cat in categories:
-        centroid_str = '[' + ','.join(map(str, cat['centroid'])) + ']'
-
-        conn.execute(text("""
-            INSERT INTO claim_categories
-            (category_name, display_name, description, centroid_embedding, claim_count)
-            VALUES (:name, :display, :desc, :centroid::vector, 0)
+        # Insert category
+        result = conn.execute(text("""
+            INSERT INTO claim_categories (category_name, display_name, description, centroid_json, claim_count)
+            VALUES (:name, :display, :desc, :centroid, :count)
+            RETURNING category_id
         """), {
             'name': cat['category_name'],
             'display': cat['display_name'],
             'desc': cat['description'],
-            'centroid': centroid_str
+            'centroid': json.dumps(cat['centroid']),
+            'count': cat['size']
+        })
+        category_id = result.fetchone()[0]
+        cat['category_id'] = category_id
+        print(f"   ✅ {cat['display_name']}: {cat['size']} items")
+
+# ============================================================
+# ASSIGN CLAIMS TO CATEGORIES
+# ============================================================
+print("\n🔗 Assigning claims to categories...")
+
+with engine.begin() as conn:
+    for i, (vector_id, metadata, label) in enumerate(zip(all_ids, all_metadata, cluster_labels)):
+        if label == -1:  # Skip noise
+            continue
+
+        claim_id = metadata.get('claim_id')
+        if not claim_id:
+            continue
+
+        # Find category
+        cat = next((c for c in categories if c['cluster_idx'] == label), None)
+        if not cat:
+            continue
+
+        # Calculate similarity to centroid
+        vec = np.array(all_vectors[i])
+        centroid = np.array(cat['centroid'])
+        similarity = float(np.dot(vec, centroid) / (np.linalg.norm(vec) * np.linalg.norm(centroid)))
+
+        # Insert membership
+        conn.execute(text("""
+            INSERT INTO claim_category_membership (claim_id, category_id, similarity_score)
+            VALUES (:cid, :cat_id, :sim)
+            ON CONFLICT (claim_id, category_id) DO UPDATE SET
+                similarity_score = EXCLUDED.similarity_score
+        """), {
+            'cid': claim_id,
+            'cat_id': cat['category_id'],
+            'sim': similarity
         })
 
-print(f"✅ Inserted {len(categories)} categories")
+print("   ✅ Claims assigned to categories")
 
-# Display categories
-print("\n📋 Category Summary:")
-print("=" * 80)
-for cat in categories:
-    print(f"  {cat['display_name']}")
-    print(f"    Name: {cat['category_name']}")
-    print(f"    Description: {cat['description']}")
-    print(f"    Sample Size: {cat['sample_size']} notes")
-    print()
-
-#=============================================================================
-# CREATE DYNAMIC CATEGORY CACHE TABLES
-#=============================================================================
-
-print("💾 Creating category-specific cache tables...")
-
-for cat in categories:
-    table_name = f"cache_{cat['category_name']}"
-
-    try:
-        with engine.begin() as conn:
-            # Create cache table
-            conn.execute(text(f"""
-                CREATE TABLE IF NOT EXISTS {table_name} (
-                    cache_id BIGSERIAL PRIMARY KEY,
-                    claim_id BIGINT,
-                    patient_id BIGINT,
-                    service_date DATE,
-                    total_charge NUMERIC(12,2),
-                    total_paid NUMERIC(12,2),
-                    primary_diagnosis VARCHAR(50),
-                    note_summary TEXT,
-                    embedding VECTOR(384),
-                    similarity_to_centroid FLOAT,
-                    created_at TIMESTAMP DEFAULT NOW()
-                )
-            """))
-
-            # Create HNSW index for fast similarity search within category
-            try:
-                conn.execute(text(f"""
-                    CREATE INDEX IF NOT EXISTS idx_{table_name}_emb
-                    ON {table_name} USING hnsw (embedding vector_cosine_ops)
-                """))
-            except:
-                pass  # Index creation might fail if pgvector extension not fully configured
-
-        print(f"   ✅ Created {table_name}")
-    except Exception as e:
-        print(f"   ❌ Failed to create {table_name}: {e}")
-
-print("✅ All cache tables created successfully")
-
-#=============================================================================
-# POPULATE CACHE TABLES
-#=============================================================================
-
-print("\n📊 Populating cache tables with claims data...")
-
-# Get all categories from database
-categories_db = pd.read_sql("SELECT category_id, category_name, centroid_embedding FROM claim_categories", engine)
-
-total_cached = 0
-
-for _, cat_row in categories_db.iterrows():
-    category_id = cat_row['category_id']
-    category_name = cat_row['category_name']
-    table_name = f"cache_{category_name}"
-    centroid = pgvector_to_array(cat_row['centroid_embedding'])
-
-    # Get notes for this cluster
-    cluster_id = next((c['cluster_id'] for c in categories if c['category_name'] == category_name), None)
-    if cluster_id is None:
-        continue
-
-    cluster_notes = embeddings_df[embeddings_df['cluster_label'] == cluster_id]
-
-    if len(cluster_notes) == 0:
-        continue
-
-    # Join with claims data and insert into cache table
-    with engine.begin() as conn:
-        for _, note in cluster_notes.iterrows():
-            # Calculate similarity to centroid
-            note_embedding = pgvector_to_array(note['embedding'])
-            similarity = 1 - np.linalg.norm(note_embedding - centroid) / (np.linalg.norm(note_embedding) * np.linalg.norm(centroid))
-
-            # Get claim details
-            claim_data = pd.read_sql(text("""
-                SELECT
-                    c.claim_id,
-                    c.patient_id,
-                    c.service_date,
-                    c.total_charge,
-                    c.total_paid,
-                    d.icd_code as primary_diagnosis
-                FROM claims c
-                LEFT JOIN diagnoses d ON c.claim_id = d.claim_id AND d.is_primary = true
-                WHERE c.claim_id = :cid
-                LIMIT 1
-            """), conn, params={'cid': note['claim_id']})
-
-            if len(claim_data) == 0:
-                continue
-
-            claim = claim_data.iloc[0]
-            emb_str = '[' + ','.join(map(str, note_embedding)) + ']'
-
-            # Insert into cache table
-            try:
-                conn.execute(text(f"""
-                    INSERT INTO {table_name}
-                    (claim_id, patient_id, service_date, total_charge, total_paid,
-                     primary_diagnosis, note_summary, embedding, similarity_to_centroid)
-                    VALUES (:cid, :pid, :sdate, :charge, :paid, :dx, :note, :emb::vector, :sim)
-                    ON CONFLICT DO NOTHING
-                """), {
-                    'cid': claim['claim_id'],
-                    'pid': claim['patient_id'],
-                    'sdate': claim['service_date'],
-                    'charge': claim['total_charge'],
-                    'paid': claim['total_paid'],
-                    'dx': claim['primary_diagnosis'],
-                    'note': note['note_text'][:500],  # Truncate to 500 chars
-                    'emb': emb_str,
-                    'sim': float(similarity)
-                })
-                total_cached += 1
-
-                # Update category membership
-                conn.execute(text("""
-                    INSERT INTO claim_category_membership
-                    (claim_id, category_id, similarity_score)
-                    VALUES (:cid, :catid, :sim)
-                    ON CONFLICT (claim_id, category_id) DO UPDATE
-                    SET similarity_score = EXCLUDED.similarity_score
-                """), {
-                    'cid': claim['claim_id'],
-                    'catid': category_id,
-                    'sim': float(similarity)
-                })
-            except Exception as e:
-                print(f"   ⚠️  Error inserting claim {note['claim_id']}: {e}")
-
-    # Update claim count
-    with engine.begin() as conn:
-        count = pd.read_sql(text(f"SELECT COUNT(*) as cnt FROM {table_name}"), conn).iloc[0]['cnt']
-        conn.execute(text("""
-            UPDATE claim_categories
-            SET claim_count = :cnt
-            WHERE category_id = :catid
-        """), {'cnt': count, 'catid': category_id})
-
-    print(f"   ✅ {table_name}: {count} claims cached")
-
-print(f"\n✅ Cached {total_cached} total claim records across all categories")
-
-#=============================================================================
-# FAST CATEGORY SEARCH FUNCTION
-#=============================================================================
-
-def search_category(category_name: str, query: str, top_k: int = 10) -> pd.DataFrame:
+# ============================================================
+# CATEGORY SEARCH FUNCTION
+# ============================================================
+def search_by_category(query: str, category_name: str = None, top_k: int = 5) -> pd.DataFrame:
     """
-    Search for similar claims within a specific category cache
-
-    Args:
-        category_name: Snake_case category name (e.g., 'cardiac_procedures')
-        query: Natural language search query
-        top_k: Number of results to return
-
-    Returns:
-        DataFrame with similar claims from the category
+    Search for similar claims, optionally filtered by category.
     """
-    # Generate query embedding
-    query_embedding = embed_model.encode([query])[0]
-    emb_str = '[' + ','.join(map(str, query_embedding)) + ']'
+    query_emb = get_embedding(query)
 
-    # Search only within the category cache table
-    table_name = f"cache_{category_name}"
+    # Build filter
+    filter_dict = None
+    if category_name:
+        filter_dict = {"category": {"$eq": category_name}}
 
-    try:
-        results = pd.read_sql(text(f"""
-            SELECT
-                cache_id,
-                claim_id,
-                patient_id,
-                service_date,
-                total_charge,
-                total_paid,
-                primary_diagnosis,
-                note_summary,
-                similarity_to_centroid,
-                1 - (embedding <=> :emb::vector) AS similarity
-            FROM {table_name}
-            ORDER BY embedding <=> :emb::vector
-            LIMIT :k
-        """), engine, params={'emb': emb_str, 'k': top_k})
+    results = index.query(
+        vector=query_emb.tolist(),
+        top_k=top_k,
+        include_metadata=True,
+        filter=filter_dict
+    )
 
-        return results
-    except Exception as e:
-        print(f"❌ Search failed: {e}")
-        return pd.DataFrame()
+    rows = []
+    for match in results.matches:
+        rows.append({
+            'claim_id': match.metadata.get('claim_id'),
+            'category': match.metadata.get('category'),
+            'note_type': match.metadata.get('note_type'),
+            'similarity': match.score,
+            'preview': match.metadata.get('text_preview', '')[:80]
+        })
 
-#=============================================================================
-# AUTO-CATEGORIZE NEW CLAIMS FUNCTION
-#=============================================================================
+    return pd.DataFrame(rows)
 
-def categorize_claim(claim_id: int, threshold: float = 0.3) -> dict:
+def auto_categorize_claim(claim_id: int, note_text: str) -> dict:
     """
-    Assign a claim to the best matching category
-
-    Args:
-        claim_id: The claim ID to categorize
-        threshold: Minimum similarity threshold (default 0.3)
-
-    Returns:
-        Dictionary with category info and similarity score
+    Automatically categorize a new claim based on its clinical note.
     """
-    # Get claim's clinical note embedding
-    note_data = pd.read_sql(text("""
-        SELECT note_id, note_text, embedding
-        FROM clinical_notes
-        WHERE claim_id = :cid AND embedding IS NOT NULL
-        LIMIT 1
-    """), engine, params={'cid': claim_id})
+    note_emb = get_embedding(note_text)
 
-    if len(note_data) == 0:
-        return {
-            'claim_id': claim_id,
-            'category': 'uncategorized',
-            'similarity': 0.0,
-            'reason': 'No clinical notes with embeddings found'
-        }
+    # Find best matching category by comparing to centroids
+    best_cat = None
+    best_sim = -1
 
-    note_embedding = pgvector_to_array(note_data.iloc[0]['embedding'])
-    emb_str = '[' + ','.join(map(str, note_embedding)) + ']'
-
-    # Compare against all category centroids
-    categories = pd.read_sql(text("""
-        SELECT
-            category_id,
-            category_name,
-            display_name,
-            1 - (centroid_embedding <=> :emb::vector) AS similarity
-        FROM claim_categories
-        ORDER BY centroid_embedding <=> :emb::vector
-        LIMIT 1
-    """), engine, params={'emb': emb_str})
-
-    if len(categories) == 0 or categories.iloc[0]['similarity'] < threshold:
-        return {
-            'claim_id': claim_id,
-            'category': 'uncategorized',
-            'similarity': categories.iloc[0]['similarity'] if len(categories) > 0 else 0.0,
-            'reason': 'No category match above threshold'
-        }
-
-    best_match = categories.iloc[0]
+    for cat in categories:
+        centroid = np.array(cat['centroid'])
+        sim = float(np.dot(note_emb, centroid) / (np.linalg.norm(note_emb) * np.linalg.norm(centroid)))
+        if sim > best_sim:
+            best_sim = sim
+            best_cat = cat
 
     return {
         'claim_id': claim_id,
-        'category_id': best_match['category_id'],
-        'category_name': best_match['category_name'],
-        'display_name': best_match['display_name'],
-        'similarity': float(best_match['similarity'])
+        'category': best_cat['category_name'] if best_cat else 'uncategorized',
+        'display_name': best_cat['display_name'] if best_cat else 'Uncategorized',
+        'similarity': best_sim
     }
 
-#=============================================================================
-# DEMONSTRATION & TESTING
-#=============================================================================
+# ============================================================
+# DEMO: CATEGORY SEARCH
+# ============================================================
+print("\n" + "=" * 70)
+print("🔍 DEMO: Category-Filtered Search")
+print("=" * 70)
 
-print("\n" + "=" * 80)
-print("🔍 TESTING CATEGORY-SPECIFIC SEARCH")
-print("=" * 80)
+demo_queries = [
+    ("heart attack chest pain", None),
+    ("diabetes blood sugar", None),
+]
 
-# Get first category for demo
-if len(categories) > 0:
-    demo_category = categories[0]['category_name']
+for query, cat_filter in demo_queries:
+    print(f"\nQuery: '{query}'" + (f" [filtered: {cat_filter}]" if cat_filter else ""))
+    print("-" * 50)
 
-    test_queries = [
-        "patient with heart condition",
-        "diabetes management",
-        "surgical procedure"
-    ]
+    results = search_by_category(query, cat_filter, top_k=3)
+    for _, row in results.iterrows():
+        print(f"  [{row['similarity']:.3f}] {row['category']}: {row['preview']}...")
 
-    for query in test_queries:
-        print(f"\n📋 Query: '{query}' in category '{demo_category}'")
-        print("-" * 80)
+# ============================================================
+# SUMMARY
+# ============================================================
+print("\n" + "=" * 70)
+print("✅ NOTEBOOK 06 COMPLETE")
+print("=" * 70)
 
-        results = search_category(demo_category, query, top_k=3)
+# Final stats
+with engine.connect() as conn:
+    cat_count = conn.execute(text("SELECT COUNT(*) FROM claim_categories")).fetchone()[0]
+    mem_count = conn.execute(text("SELECT COUNT(*) FROM claim_category_membership")).fetchone()[0]
 
-        if len(results) > 0:
-            for _, row in results.iterrows():
-                print(f"  [Sim: {row['similarity']:.3f}] Claim {row['claim_id']} | ${row['total_charge']:.2f}")
-                print(f"     {row['note_summary'][:65]}...")
-        else:
-            print("  No results found")
+print(f"""
+📊 Summary:
+   • Categories created: {cat_count}
+   • Claims categorized: {mem_count}
+   • Clustering: {'HDBSCAN' if n_clusters >= 3 else 'KMeans (fallback)'}
+   • LLM labeling: {'Claude' if anthropic_client else 'Generic names'}
 
-print("\n" + "=" * 80)
-print("🏥 TESTING AUTO-CATEGORIZATION")
-print("=" * 80)
+📋 New Tables:
+   • claim_categories - Master category definitions
+   • claim_category_membership - Claim-to-category mappings
 
-# Test categorization on sample claims
-test_claims = pd.read_sql(text("""
-    SELECT DISTINCT claim_id
-    FROM clinical_notes
-    WHERE embedding IS NOT NULL
-    LIMIT 3
-"""), engine)
+🔍 Available Functions:
+   • search_by_category(query, category_name, top_k)
+   • auto_categorize_claim(claim_id, note_text)
 
-for _, row in test_claims.iterrows():
-    result = categorize_claim(row['claim_id'])
-    if result.get('category_name'):
-        print(f"Claim {result['claim_id']:5d} → {result['display_name']} (similarity: {result['similarity']:.3f})")
-    else:
-        print(f"Claim {result['claim_id']:5d} → {result['category']} ({result['reason']})")
-
-#=============================================================================
-# FINAL SUMMARY
-#=============================================================================
-
-print("\n" + "=" * 80)
-print("📊 FINAL SUMMARY")
-print("=" * 80)
-
-summary = pd.read_sql(text("""
-    SELECT
-        category_name,
-        display_name,
-        claim_count,
-        description
-    FROM claim_categories
-    ORDER BY claim_count DESC
-"""), engine)
-
-print(f"\n✅ Created {len(summary)} category cache tables:")
-print()
-for _, cat in summary.iterrows():
-    print(f"  📁 {cat['display_name']}")
-    print(f"     Table: cache_{cat['category_name']}")
-    print(f"     Claims: {cat['claim_count']}")
-    print(f"     Description: {cat['description']}")
-    print()
-
-# Get total membership
-total_memberships = pd.read_sql(text("SELECT COUNT(*) as cnt FROM claim_category_membership"), engine).iloc[0]['cnt']
-print(f"📈 Total category memberships: {total_memberships}")
-
-print("\n" + "=" * 80)
-print("✅ NOTEBOOK 6 COMPLETE!")
-print("=" * 80)
-print("\n💡 Key Features:")
-print("   • LLM-powered intelligent cluster labeling")
-print("   • Category-specific cache tables for fast search")
-print("   • HNSW indexes for sub-millisecond similarity search")
-print("   • Auto-categorization of new claims")
-print("   • Semantic search within categories")
-print("\n📖 Next steps:")
-print("   • Use search_category() to find similar claims in a category")
-print("   • Use categorize_claim() to auto-assign new claims to categories")
-print("   • Query cache tables directly for ultra-fast retrieval")
-print("=" * 80)
+🚀 Pipeline complete!
+""")
+print("=" * 70)
