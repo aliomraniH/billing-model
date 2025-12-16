@@ -215,16 +215,17 @@ def search_similar_notes(query: str, top_k: int = 5) -> pd.DataFrame:
     emb_str = '[' + ','.join(map(str, query_embedding)) + ']'
 
     # Search using pgvector cosine distance
+    # Note: Using CAST() instead of :: for better SQLAlchemy compatibility
     results = pd.read_sql(text("""
         SELECT
             note_id,
             claim_id,
             note_type,
             note_text,
-            1 - (embedding <=> :emb::vector) AS similarity
+            1 - (embedding <=> CAST(:emb AS vector)) AS similarity
         FROM clinical_notes
         WHERE embedding IS NOT NULL
-        ORDER BY embedding <=> :emb::vector
+        ORDER BY embedding <=> CAST(:emb AS vector)
         LIMIT :k
     """), engine, params={'emb': emb_str, 'k': top_k})
 
