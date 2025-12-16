@@ -294,7 +294,7 @@ with engine.begin() as conn:
         conn.execute(text("""
             INSERT INTO claim_categories
             (category_name, display_name, description, centroid_embedding, claim_count)
-            VALUES (:name, :display, :desc, :centroid::vector, 0)
+            VALUES (:name, :display, :desc, CAST(:centroid AS vector), 0)
         """), {
             'name': cat['category_name'],
             'display': cat['display_name'],
@@ -418,7 +418,7 @@ for _, cat_row in categories_db.iterrows():
                     INSERT INTO {table_name}
                     (claim_id, patient_id, service_date, total_charge, total_paid,
                      primary_diagnosis, note_summary, embedding, similarity_to_centroid)
-                    VALUES (:cid, :pid, :sdate, :charge, :paid, :dx, :note, :emb::vector, :sim)
+                    VALUES (:cid, :pid, :sdate, :charge, :paid, :dx, :note, CAST(:emb AS vector), :sim)
                     ON CONFLICT DO NOTHING
                 """), {
                     'cid': claim['claim_id'],
@@ -496,9 +496,9 @@ def search_category(category_name: str, query: str, top_k: int = 10) -> pd.DataF
                 primary_diagnosis,
                 note_summary,
                 similarity_to_centroid,
-                1 - (embedding <=> :emb::vector) AS similarity
+                1 - (embedding <=> CAST(:emb AS vector)) AS similarity
             FROM {table_name}
-            ORDER BY embedding <=> :emb::vector
+            ORDER BY embedding <=> CAST(:emb AS vector)
             LIMIT :k
         """), engine, params={'emb': emb_str, 'k': top_k})
 
@@ -547,9 +547,9 @@ def categorize_claim(claim_id: int, threshold: float = 0.3) -> dict:
             category_id,
             category_name,
             display_name,
-            1 - (centroid_embedding <=> :emb::vector) AS similarity
+            1 - (centroid_embedding <=> CAST(:emb AS vector)) AS similarity
         FROM claim_categories
-        ORDER BY centroid_embedding <=> :emb::vector
+        ORDER BY centroid_embedding <=> CAST(:emb AS vector)
         LIMIT 1
     """), engine, params={'emb': emb_str})
 
