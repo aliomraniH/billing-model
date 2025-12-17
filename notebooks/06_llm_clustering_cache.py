@@ -250,9 +250,15 @@ print("\n🔬 Clustering with HDBSCAN...")
 
 from sklearn.cluster import HDBSCAN
 
-# Adjust min_cluster_size based on dataset size
-adjusted_min_cluster_size = max(MIN_CLUSTER_SIZE, len(X) // 100)  # At least 1% of data
+# Adjust min_cluster_size based on dataset size to prevent over-clustering
+# Rule of thumb: Each cluster should have at least 1-2% of total data
+recommended_min_size = max(len(X) // 50, 10)  # At least 2% of data, minimum 10
+adjusted_min_cluster_size = max(MIN_CLUSTER_SIZE, recommended_min_size)
+
 print(f"   Parameters: min_cluster_size={adjusted_min_cluster_size}, min_samples={MIN_SAMPLES}")
+if adjusted_min_cluster_size > MIN_CLUSTER_SIZE:
+    print(f"   ℹ️  Adjusted from MIN_CLUSTER_SIZE={MIN_CLUSTER_SIZE} to {adjusted_min_cluster_size} based on dataset size")
+    print(f"   💡 This helps prevent over-clustering and duplicate category names")
 
 clusterer = HDBSCAN(
     min_cluster_size=adjusted_min_cluster_size,
@@ -448,6 +454,43 @@ for cluster_idx in range(n_clusters):
 print(f"\n✅ Labeled {len(categories)} categories")
 
 # ============================================================
+# DEDUPLICATE CATEGORY NAMES
+# ============================================================
+print("\n🔧 Checking for duplicate category names...")
+
+# Check for duplicates and make names unique
+seen_names = {}
+duplicates_found = 0
+
+for cat in categories:
+    original_name = cat['category_name']
+
+    if original_name in seen_names:
+        # Duplicate found - append cluster index to make unique
+        duplicates_found += 1
+        unique_name = f"{original_name}_{cat['cluster_idx']}"
+
+        print(f"   ⚠️ Duplicate '{original_name}' found in clusters {seen_names[original_name]} and {cat['cluster_idx']}")
+        print(f"      → Renamed to '{unique_name}'")
+
+        cat['category_name'] = unique_name
+        seen_names[unique_name] = cat['cluster_idx']
+    else:
+        seen_names[original_name] = cat['cluster_idx']
+
+if duplicates_found > 0:
+    print(f"\n   ⚠️ Fixed {duplicates_found} duplicate category names")
+    print(f"   ℹ️  Consider increasing MIN_CLUSTER_SIZE to reduce over-clustering")
+else:
+    print(f"   ✅ No duplicate category names found")
+
+# Warn about over-clustering
+if n_clusters > 20:
+    print(f"\n   ⚠️ WARNING: {n_clusters} clusters may be too granular")
+    print(f"   💡 Consider increasing MIN_CLUSTER_SIZE (current: {adjusted_min_cluster_size})")
+    print(f"   💡 Recommended: MIN_CLUSTER_SIZE >= {len(X) // 50} for {len(X)} vectors")
+
+# ============================================================
 # CREATE DATABASE TABLES
 # ============================================================
 print("\n📋 Creating database tables...")
@@ -491,10 +534,16 @@ print("\n📊 Populating categories...")
 
 with engine.begin() as conn:
     for cat in categories:
-        # Insert category
+        # UPSERT: Insert or update if category_name already exists
         result = conn.execute(text("""
             INSERT INTO claim_categories (category_name, display_name, description, centroid_json, claim_count)
             VALUES (:name, :display, :desc, :centroid, :count)
+            ON CONFLICT (category_name) DO UPDATE SET
+                display_name = EXCLUDED.display_name,
+                description = EXCLUDED.description,
+                centroid_json = EXCLUDED.centroid_json,
+                claim_count = EXCLUDED.claim_count,
+                created_at = NOW()
             RETURNING category_id
         """), {
             'name': cat['category_name'],
