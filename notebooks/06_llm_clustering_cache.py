@@ -46,20 +46,38 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 # ============================================================
-# CONFIGURATION
+# CONFIGURATION (Dynamic - from config.py)
 # ============================================================
+# Load centralized configuration
+from config import get_config
+
+# Initialize configuration
+cfg = get_config()
+
+# Environment variables
 DATABASE_URL = os.getenv('VERCEL_POSTGRES_URL')
 HF_TOKEN = os.getenv('HF_TOKEN')
 PINECONE_API_KEY = os.getenv('PINECONE_API_KEY')
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
 
-MODEL_ID = os.getenv("HF_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
-EMBEDDING_DIM = int(os.getenv("HF_EMBEDDING_DIM", 384))
-PINECONE_INDEX = "medical-billing-notes"
+# Model configuration (from config system)
+MODEL_ID = cfg.embedding.model_id
+EMBEDDING_DIM = cfg.embedding.dimension
+PINECONE_INDEX = cfg.pinecone.index_name
 
-# Clustering configuration
-MIN_CLUSTER_SIZE = int(os.getenv("MIN_CLUSTER_SIZE", 5))  # Minimum points per cluster
-MIN_SAMPLES = int(os.getenv("MIN_SAMPLES", 2))  # HDBSCAN min_samples
+# Clustering configuration (from config system)
+MIN_CLUSTER_SIZE = cfg.clustering.min_cluster_size
+MIN_SAMPLES = cfg.clustering.min_samples
+ADAPTIVE_SIZING = cfg.clustering.adaptive_sizing
+ADAPTIVE_SIZE_RATIO = cfg.clustering.adaptive_size_ratio
+
+# LLM configuration (from config system)
+CLAUDE_MODEL = cfg.llm.model_id
+CLAUDE_MAX_TOKENS = cfg.llm.max_tokens
+CLAUDE_TEMPERATURE = cfg.llm.temperature
+
+# Refresh configuration (from config system)
+CATEGORY_REFRESH_HOURS = cfg.refresh.category_refresh_hours
 
 # Validate
 missing = []
@@ -73,7 +91,8 @@ if missing:
 if not ANTHROPIC_API_KEY:
     print("⚠️ ANTHROPIC_API_KEY not set - will use generic category names")
 
-print("✅ Environment validated")
+# Print loaded configuration
+cfg.print_config()
 
 # ============================================================
 # INITIALIZE CLIENTS
@@ -122,25 +141,16 @@ hf_client = InferenceClient(
     api_key=HF_TOKEN,
 ) if HF_TOKEN else None
 
-# Anthropic with dynamic model selection
+# Anthropic client initialization
 anthropic_client = None
-CLAUDE_MODEL = "claude-sonnet-4-5-20250929"  # Default fallback
 
 if ANTHROPIC_API_KEY:
     from anthropic import Anthropic
     anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
-    # Try to get latest Sonnet model dynamically
-    try:
-        # Check for environment override first
-        CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", CLAUDE_MODEL)
-
-        # Verify model is available
-        print(f"   ✅ Anthropic: {CLAUDE_MODEL}")
-        print(f"   💡 To use a different model: export CLAUDE_MODEL='claude-opus-4-5-20251101'")
-    except Exception as e:
-        print(f"   ⚠️ Could not verify Anthropic model: {e}")
-        print(f"   ✅ Using default: {CLAUDE_MODEL}")
+    # CLAUDE_MODEL is already loaded from config system
+    print(f"   ✅ Anthropic: {CLAUDE_MODEL}")
+    print(f"   💡 Model configured via config.py or CLAUDE_MODEL env var")
 
 # ============================================================
 # HELPER FUNCTIONS
@@ -409,8 +419,9 @@ def label_cluster_with_llm(sample_notes: List[str], cluster_idx: int) -> Dict:
 
     try:
         message = anthropic_client.messages.create(
-            model=CLAUDE_MODEL,  # Use dynamic model
-            max_tokens=500,
+            model=CLAUDE_MODEL,  # From config system
+            max_tokens=CLAUDE_MAX_TOKENS,  # From config system
+            temperature=CLAUDE_TEMPERATURE,  # From config system
             system="You are a medical coding expert. Analyze clinical notes and categorize them. Respond with ONLY valid JSON, no markdown.",
             messages=[{
                 "role": "user",

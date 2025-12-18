@@ -38,24 +38,35 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 # ============================================================
-# CONFIGURATION
+# CONFIGURATION (Dynamic - from config.py)
 # ============================================================
+# Load centralized configuration
+from config import get_config
+
+# Initialize configuration
+cfg = get_config()
+
+# Environment variables (still required)
 DATABASE_URL = os.getenv('VERCEL_POSTGRES_URL')
 HF_TOKEN = os.getenv('HF_TOKEN')
 PINECONE_API_KEY = os.getenv('PINECONE_API_KEY')
 
-# Model configuration
-MODEL_ID = os.getenv("HF_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
-EMBEDDING_DIM = int(os.getenv("HF_EMBEDDING_DIM", 384))
-PINECONE_INDEX = "medical-billing-notes"
+# Model configuration (from config system)
+MODEL_ID = cfg.embedding.model_id
+EMBEDDING_DIM = cfg.embedding.dimension
+PINECONE_INDEX = cfg.pinecone.index_name
 
-# Processing configuration
-BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", 100))  # Process in batches
-MAX_CLAIMS_TO_PROCESS = int(os.getenv("MAX_CLAIMS_TO_PROCESS", 1000))  # Set to -1 for all claims
-RETRY_ATTEMPTS = 3
-RETRY_DELAY = 2  # seconds
+# Processing configuration (from config system)
+BATCH_SIZE = cfg.embedding.batch_size
+MAX_CLAIMS_TO_PROCESS = cfg.processing.max_claims_to_process
+RETRY_ATTEMPTS = cfg.embedding.max_retries
+RETRY_DELAY = cfg.embedding.retry_delay_seconds
 
-# Validate
+# Refresh configuration (from config system)
+AUTO_REFRESH = cfg.refresh.auto_refresh_enabled
+REFRESH_INTERVAL_HOURS = cfg.refresh.default_embedding_refresh_hours
+
+# Validate environment variables
 missing = []
 if not DATABASE_URL: missing.append("VERCEL_POSTGRES_URL")
 if not HF_TOKEN: missing.append("HF_TOKEN")
@@ -70,9 +81,8 @@ if missing:
     print("   PINECONE_API_KEY: https://www.pinecone.io/ (free signup)")
     raise ValueError(f"Missing: {', '.join(missing)}")
 
-print("✅ All environment variables loaded")
-print(f"   Batch size: {BATCH_SIZE}")
-print(f"   Max claims: {'ALL' if MAX_CLAIMS_TO_PROCESS == -1 else MAX_CLAIMS_TO_PROCESS:,}")
+# Print loaded configuration
+cfg.print_config()
 
 # ============================================================
 # DATABASE CONNECTION (Vercel Postgres)
@@ -497,6 +507,30 @@ for batch_start in range(0, len(claim_ids), BATCH_SIZE):
     with engine.begin() as conn:
         for claim_id in batch_claim_ids:
             try:
+                # Check if embedding needs refresh (if auto-refresh enabled)
+                needs_embedding = True
+                if AUTO_REFRESH:
+                    result = conn.execute(text("""
+                        SELECT last_embedded_at, embedding_model
+                        FROM clinical_notes
+                        WHERE claim_id = :cid
+                        LIMIT 1
+                    """), {'cid': claim_id})
+                    row = result.fetchone()
+
+                    if row and row[0]:
+                        # Calculate age in hours
+                        last_embedded = row[0]
+                        age_hours = (datetime.now(last_embedded.tzinfo) - last_embedded).total_seconds() / 3600
+
+                        # Skip if fresh and model hasn't changed
+                        if age_hours < REFRESH_INTERVAL_HOURS and row[1] == MODEL_ID:
+                            needs_embedding = False
+
+                if not needs_embedding:
+                    stats['total_processed'] += 1
+                    continue
+
                 # Generate synthetic note
                 note_type, note_text = generate_clinical_note(claim_id)
 
@@ -517,6 +551,21 @@ for batch_start in range(0, len(claim_ids), BATCH_SIZE):
                 embedding = get_embedding(note_text)
 
                 if embedding is not None:
+                    # Update timestamp and model version in Postgres
+                    conn.execute(text("""
+                        UPDATE clinical_notes
+                        SET
+                            last_embedded_at = NOW(),
+                            embedding_model = :model,
+                            embedding_version = :version
+                        WHERE claim_id = :cid AND note_type = :ntype
+                    """), {
+                        'cid': claim_id,
+                        'ntype': note_type,
+                        'model': MODEL_ID,
+                        'version': '1.0'  # Track version for future migrations
+                    })
+
                     # Prepare for Pinecone batch upsert
                     vector_id = f"claim_{claim_id}_{note_type}"
                     pinecone_vectors.append({
@@ -525,7 +574,9 @@ for batch_start in range(0, len(claim_ids), BATCH_SIZE):
                         "metadata": {
                             "claim_id": claim_id,
                             "note_type": note_type,
-                            "text_preview": note_text[:200]
+                            "text_preview": note_text[:200],
+                            "embedding_model": MODEL_ID,
+                            "embedded_at": datetime.now().isoformat()
                         }
                     })
                     stats['embeddings_created'] += 1
