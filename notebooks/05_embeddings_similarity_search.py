@@ -247,58 +247,179 @@ with engine.begin() as conn:
 # ============================================================
 print("\n📝 Generating clinical notes for claims...")
 
-# Template-based synthetic note generation
+# Template-based synthetic note generation (EXPANDED for variety)
 NOTE_TEMPLATES = {
     'diabetes': [
         "Patient with Type 2 diabetes mellitus. HbA1c {a1c}%. Blood glucose {bg} mg/dL. {treatment}.",
         "Diabetes follow-up visit. A1C {a1c}%, {complication}. Continue {treatment}.",
         "Uncontrolled diabetes admitted. Blood sugar {bg}. Started on {treatment}.",
+        "DM2 patient reviewed. Hemoglobin A1C {a1c}%, glucose {bg}. Adjust {treatment}.",
+        "Admission for diabetic ketoacidosis. Initial BG {bg}. {treatment} initiated. Recent A1C {a1c}%.",
+        "Outpatient diabetes management. {complication} identified. A1C {a1c}%. Modified {treatment}.",
+        "Hospital admission DM2 uncontrolled. Blood sugar {bg}. A1C {a1c}%. {treatment} started.",
+        "Diabetes clinic visit. Good glycemic control, A1C {a1c}%. {complication}. Continue {treatment}.",
+        "Patient presents with hyperglycemia {bg}. {complication}. A1C {a1c}%. {treatment} adjusted.",
+        "Type 2 diabetes follow-up. HbA1c {a1c}%, blood glucose {bg}. {treatment} regimen.",
     ],
     'cardiac': [
         "Acute chest pain with {symptom}. {finding}. {procedure} performed.",
         "Cardiac catheterization for {indication}. {result}. {treatment}.",
         "{condition} with {complication}. {treatment} initiated.",
+        "Urgent cardiac evaluation. {symptom} noted. {finding} on imaging. {procedure} completed.",
+        "Interventional cardiology: {indication}. {procedure} performed. {result}. {treatment} plan.",
+        "MI protocol initiated. {symptom} present. Cath lab: {finding}. {procedure} successful.",
+        "Cardiac surgery consult. {condition} diagnosis. {procedure} recommended. {treatment} started.",
+        "Post-cath care. {indication} managed with {procedure}. {result}. {treatment} prescribed.",
+        "Cardiology admission for {indication}. {symptom} reported. {finding}. {procedure} done.",
+        "ACS presentation. {symptom} with {finding}. Emergency {procedure}. {result}. {treatment}.",
     ],
     'respiratory': [
         "{condition} with {symptom}. {imaging_finding}. {treatment} administered.",
         "Respiratory failure due to {cause}. {intervention} started.",
         "Admitted for {condition}. {treatment} given. {outcome}.",
+        "Pulmonary consult: {condition}. Chest X-ray shows {imaging_finding}. {intervention} initiated.",
+        "Acute {condition} exacerbation. {symptom} noted. {imaging_finding} on CT. {treatment} started.",
+        "ICU admission respiratory distress. {cause} identified. {intervention} and {treatment}. {outcome}.",
+        "Pulmonology evaluation. {condition} managed. {imaging_finding}. {intervention} applied. {outcome}.",
+        "Respiratory support needed. {cause} diagnosed. {symptom} improved with {treatment}. {outcome}.",
+        "Hospital admission {condition}. {imaging_finding} confirmed. {intervention} therapy. {outcome}.",
+        "Urgent pulmonary care. {condition} with {symptom}. {treatment} and {intervention}. {outcome}.",
     ],
     'orthopedic': [
         "{procedure} for {indication}. {details}. {outcome}.",
         "{joint} replacement surgery. {implant_type}. {postop}.",
         "Orthopedic procedure: {procedure}. {details}. Discharged {outcome}.",
+        "Elective {joint} arthroplasty. {indication} indication. {implant_type} used. {postop}. {outcome}.",
+        "Operative report: {procedure}. {details}. {implant_type} components. {postop} protocol.",
+        "Orthopedic surgery {procedure} completed. {indication}. {details}. {outcome} noted.",
+        "Joint replacement {joint}. Diagnosis {indication}. {implant_type}. Post-op {postop}. {outcome}.",
+        "Surgical intervention {procedure}. {indication} severity. {details} approach. {outcome}.",
+        "Total {joint} replacement performed. {indication}. {implant_type} prosthesis. {postop}.",
+        "{joint} surgery scheduled. {indication} diagnosed. {procedure} completed. {details}. {outcome}.",
     ],
     'gi': [
         "{procedure} performed. {finding}. {treatment}.",
         "GI surgery: {procedure} for {indication}. {outcome}.",
         "{condition} managed with {treatment}. {result}.",
+        "Gastroenterology procedure {procedure} completed. {finding} identified. {treatment} plan.",
+        "Endoscopy suite: {procedure} done. {indication}. {finding} noted. {treatment} recommended.",
+        "GI intervention for {indication}. {procedure} successful. {finding}. {treatment} started.",
+        "Digestive system evaluation. {condition} confirmed. {procedure} performed. {result}.",
+        "Surgical management {procedure}. {indication} indication. {finding} pathology. {outcome}.",
+        "GI consult: {condition}. {procedure} recommended and completed. {finding}. {treatment}.",
+        "Abdominal surgery {procedure}. {indication}. {finding} discovered. {treatment}. {outcome}.",
     ],
 }
 
 FILLERS = {
-    'a1c': ['7.2', '8.5', '9.1', '6.8', '10.2'],
-    'bg': ['180', '220', '150', '280', '195'],
-    'treatment': ['metformin and insulin', 'glipizide', 'insulin therapy', 'lifestyle modifications'],
-    'complication': ['peripheral neuropathy noted', 'retinopathy screening done', 'no complications'],
-    'symptom': ['ST elevation V1-V4', 'inferior wall changes', 'troponin elevation'],
-    'finding': ['90% LAD stenosis', 'RCA occlusion', '3-vessel disease'],
-    'procedure': ['PCI with stent placement', 'CABG', 'cardiac catheterization'],
-    'indication': ['unstable angina', 'STEMI', 'chest pain'],
-    'result': ['successful revascularization', 'stent placed', 'improved flow'],
-    'condition': ['pneumonia', 'COPD exacerbation', 'asthma attack', 'pulmonary embolism'],
-    'imaging_finding': ['bilateral infiltrates', 'right lower lobe consolidation', 'pleural effusion'],
-    'intervention': ['BiPAP', 'mechanical ventilation', 'oxygen therapy'],
-    'outcome': ['improved and discharged', 'stable condition', 'recovery ongoing'],
-    'cause': ['pneumonia', 'COPD', 'acute exacerbation'],
-    'joint': ['Right knee', 'Left hip', 'Right shoulder', 'Left knee'],
-    'implant_type': ['cemented prosthesis', 'uncemented components', 'hybrid fixation'],
-    'postop': ['PT started POD1', 'recovery uneventful', 'mobilizing well'],
-    'details': ['minimally invasive approach', 'standard technique', 'no complications'],
+    # Diabetes-related values (10+ options each)
+    'a1c': ['6.5', '6.8', '7.0', '7.2', '7.5', '8.0', '8.5', '9.1', '9.8', '10.2', '11.0', '11.5'],
+    'bg': ['140', '150', '165', '180', '195', '210', '220', '245', '260', '280', '310', '350'],
+    'treatment': [
+        'metformin and insulin', 'glipizide', 'insulin therapy', 'lifestyle modifications',
+        'sitagliptin', 'empagliflozin', 'liraglutide', 'glyburide', 'pioglitazone', 'dulaglutide',
+        'semaglutide', 'insulin pump therapy'
+    ],
+    'complication': [
+        'peripheral neuropathy noted', 'retinopathy screening done', 'no complications',
+        'diabetic foot ulcer', 'nephropathy stage 2', 'gastroparesis symptoms',
+        'autonomic neuropathy', 'microalbuminuria detected', 'macular edema',
+        'charcot arthropathy', 'hypoglycemia unawareness'
+    ],
+
+    # Cardiac-related values (10+ options each)
+    'symptom': [
+        'ST elevation V1-V4', 'inferior wall changes', 'troponin elevation',
+        'T wave inversion', 'Q waves anterior', 'LBBB pattern',
+        'atrial fibrillation', 'ventricular tachycardia', 'ST depression lateral',
+        'prolonged QT interval', 'right axis deviation', 'low voltage QRS'
+    ],
+    'finding': [
+        '90% LAD stenosis', 'RCA occlusion', '3-vessel disease',
+        '70% LCx stenosis', 'diagonal branch occlusion', 'diffuse CAD',
+        'ostial lesion RCA', 'bifurcation lesion', 'in-stent restenosis',
+        'total occlusion LAD', 'chronic total occlusion', 'moderate LM disease'
+    ],
+    'procedure': [
+        'PCI with stent placement', 'CABG', 'cardiac catheterization',
+        'balloon angioplasty', 'rotational atherectomy', 'IVUS-guided PCI',
+        'FFR measurement', 'OCT imaging', 'DES placement',
+        'thrombus aspiration', 'kissing stents', 'atherectomy'
+    ],
+    'indication': [
+        'unstable angina', 'STEMI', 'chest pain', 'NSTEMI',
+        'stable angina', 'post-MI evaluation', 'cardiogenic shock',
+        'failed medical therapy', 'positive stress test', 'crescendo angina',
+        'acute coronary syndrome'
+    ],
+    'result': [
+        'successful revascularization', 'stent placed', 'improved flow',
+        'TIMI 3 flow restored', 'no residual stenosis', 'optimal result',
+        'complications noted', 'requires CABG', 'incomplete revascularization',
+        'dissection repaired', 'no-reflow phenomenon', 'successful PCI'
+    ],
+
+    # Respiratory-related values (10+ options each)
+    'condition': [
+        'pneumonia', 'COPD exacerbation', 'asthma attack', 'pulmonary embolism',
+        'acute bronchitis', 'respiratory failure', 'COVID-19 pneumonia',
+        'aspiration pneumonia', 'interstitial lung disease', 'pleural effusion',
+        'spontaneous pneumothorax', 'acute respiratory distress'
+    ],
+    'imaging_finding': [
+        'bilateral infiltrates', 'right lower lobe consolidation', 'pleural effusion',
+        'left upper lobe opacity', 'ground glass opacities', 'hilar lymphadenopathy',
+        'pulmonary edema', 'interstitial markings', 'cavitary lesion',
+        'nodular densities', 'pneumothorax right', 'atelectasis left base'
+    ],
+    'intervention': [
+        'BiPAP', 'mechanical ventilation', 'oxygen therapy',
+        'high-flow nasal cannula', 'chest tube placement', 'bronchoscopy',
+        'nebulizer treatments', 'inhaled corticosteroids', 'antibiotics IV',
+        'prone positioning', 'ECMO support', 'thoracentesis'
+    ],
+    'outcome': [
+        'improved and discharged', 'stable condition', 'recovery ongoing',
+        'transferred to ICU', 'required intubation', 'weaned off oxygen',
+        'discharged on home O2', 'readmission within 30 days', 'full recovery',
+        'chronic oxygen dependence', 'pulmonary rehab referral'
+    ],
+    'cause': [
+        'pneumonia', 'COPD', 'acute exacerbation', 'viral infection',
+        'bacterial infection', 'allergen exposure', 'medication non-compliance',
+        'seasonal triggers', 'smoking relapse', 'environmental factors'
+    ],
+
+    # Orthopedic-related values (10+ options each)
+    'joint': [
+        'Right knee', 'Left hip', 'Right shoulder', 'Left knee',
+        'Right hip', 'Left shoulder', 'Right ankle', 'Left elbow',
+        'bilateral knees', 'bilateral hips', 'cervical spine', 'lumbar spine'
+    ],
+    'implant_type': [
+        'cemented prosthesis', 'uncemented components', 'hybrid fixation',
+        'posterior-stabilized implant', 'cruciate-retaining design', 'ceramic-on-ceramic',
+        'metal-on-polyethylene', 'dual-mobility construct', 'custom implant',
+        'revision components', 'constrained liner'
+    ],
+    'postop': [
+        'PT started POD1', 'recovery uneventful', 'mobilizing well',
+        'weight-bearing as tolerated', 'ROM exercises initiated', 'pain well controlled',
+        'no complications', 'early mobilization', 'discharge POD3',
+        'home health arranged', 'DVT prophylaxis given', 'surgical site clean'
+    ],
+    'details': [
+        'minimally invasive approach', 'standard technique', 'no complications',
+        'anterolateral approach', 'posterior approach', 'computer-navigated',
+        'robotic-assisted', 'direct anterior approach', 'mini-incision',
+        'revision procedure', 'complex primary', 'staged bilateral'
+    ],
 }
 
 def generate_clinical_note(claim_id: int) -> Tuple[str, str]:
-    """Generate a synthetic clinical note for a claim."""
+    """Generate a synthetic clinical note for a claim with unique identifiers."""
+    import datetime
+
     # Randomly choose category
     category = random.choice(list(NOTE_TEMPLATES.keys()))
     template = random.choice(NOTE_TEMPLATES[category])
@@ -308,6 +429,16 @@ def generate_clinical_note(claim_id: int) -> Tuple[str, str]:
     for key, values in FILLERS.items():
         if '{' + key + '}' in note_text:
             note_text = note_text.replace('{' + key + '}', random.choice(values))
+
+    # Add unique identifiers to reduce duplicates
+    visit_date = datetime.date(2024, random.randint(1, 12), random.randint(1, 28))
+    providers = ['Dr. Smith', 'Dr. Johnson', 'Dr. Williams', 'Dr. Brown', 'Dr. Jones',
+                 'Dr. Garcia', 'Dr. Miller', 'Dr. Davis', 'Dr. Rodriguez', 'Dr. Martinez',
+                 'Dr. Hernandez', 'Dr. Lopez']
+    provider = random.choice(providers)
+
+    # Append unique metadata to note
+    note_text = f"{note_text} Visit date: {visit_date}. Attending: {provider}."
 
     # Choose note type
     note_type = random.choice(['discharge', 'encounter', 'procedure', 'operative'])

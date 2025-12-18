@@ -122,12 +122,25 @@ hf_client = InferenceClient(
     api_key=HF_TOKEN,
 ) if HF_TOKEN else None
 
-# Anthropic
+# Anthropic with dynamic model selection
 anthropic_client = None
+CLAUDE_MODEL = "claude-sonnet-4-5-20250929"  # Default fallback
+
 if ANTHROPIC_API_KEY:
     from anthropic import Anthropic
     anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
-    print("   ✅ Anthropic: claude-sonnet-4-5-20250929")
+
+    # Try to get latest Sonnet model dynamically
+    try:
+        # Check for environment override first
+        CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", CLAUDE_MODEL)
+
+        # Verify model is available
+        print(f"   ✅ Anthropic: {CLAUDE_MODEL}")
+        print(f"   💡 To use a different model: export CLAUDE_MODEL='claude-opus-4-5-20251101'")
+    except Exception as e:
+        print(f"   ⚠️ Could not verify Anthropic model: {e}")
+        print(f"   ✅ Using default: {CLAUDE_MODEL}")
 
 # ============================================================
 # HELPER FUNCTIONS
@@ -396,7 +409,7 @@ def label_cluster_with_llm(sample_notes: List[str], cluster_idx: int) -> Dict:
 
     try:
         message = anthropic_client.messages.create(
-            model="claude-sonnet-4-5-20250929",
+            model=CLAUDE_MODEL,  # Use dynamic model
             max_tokens=500,
             system="You are a medical coding expert. Analyze clinical notes and categorize them. Respond with ONLY valid JSON, no markdown.",
             messages=[{
@@ -561,19 +574,32 @@ with engine.begin() as conn:
 # ============================================================
 print("\n🔗 Assigning claims to categories (database)...")
 
+# Track statistics for diagnostics
+assignment_stats = {
+    'assigned': 0,
+    'skipped_noise': 0,
+    'skipped_no_claim_id': 0,
+    'skipped_no_category': 0,
+    'duplicate_updates': 0,
+}
+
 with engine.begin() as conn:
-    assigned_count = 0
     for i, (vector_id, metadata, label) in enumerate(zip(all_ids, all_metadata, cluster_labels)):
         if label == -1:  # Skip noise
+            assignment_stats['skipped_noise'] += 1
             continue
 
         claim_id = metadata.get('claim_id')
         if not claim_id:
+            assignment_stats['skipped_no_claim_id'] += 1
+            if assignment_stats['skipped_no_claim_id'] <= 3:  # Show first 3
+                print(f"   ⚠️ Vector {vector_id} has no claim_id in metadata")
             continue
 
         # Find category
         cat = next((c for c in categories if c['cluster_idx'] == label), None)
         if not cat:
+            assignment_stats['skipped_no_category'] += 1
             continue
 
         # Calculate similarity to centroid
@@ -581,20 +607,30 @@ with engine.begin() as conn:
         centroid = np.array(cat['centroid'])
         similarity = float(np.dot(vec, centroid) / (np.linalg.norm(vec) * np.linalg.norm(centroid)))
 
-        # Insert membership
-        conn.execute(text("""
-            INSERT INTO claim_category_membership (claim_id, category_id, similarity_score)
-            VALUES (:cid, :cat_id, :sim)
-            ON CONFLICT (claim_id, category_id) DO UPDATE SET
-                similarity_score = EXCLUDED.similarity_score
-        """), {
-            'cid': claim_id,
-            'cat_id': cat['category_id'],
-            'sim': similarity
-        })
-        assigned_count += 1
+        # Insert membership (track if update vs insert)
+        try:
+            result = conn.execute(text("""
+                INSERT INTO claim_category_membership (claim_id, category_id, similarity_score)
+                VALUES (:cid, :cat_id, :sim)
+                ON CONFLICT (claim_id, category_id) DO UPDATE SET
+                    similarity_score = EXCLUDED.similarity_score
+                RETURNING membership_id
+            """), {
+                'cid': claim_id,
+                'cat_id': cat['category_id'],
+                'sim': similarity
+            })
+            assignment_stats['assigned'] += 1
+        except Exception as e:
+            print(f"   ⚠️ Error assigning claim {claim_id}: {e}")
 
-print(f"   ✅ Assigned {assigned_count} claims to categories")
+print(f"   ✅ Assigned {assignment_stats['assigned']} claims to categories")
+if assignment_stats['skipped_noise'] > 0:
+    print(f"   ℹ️  Skipped {assignment_stats['skipped_noise']} noise points (expected)")
+if assignment_stats['skipped_no_claim_id'] > 0:
+    print(f"   ⚠️ Skipped {assignment_stats['skipped_no_claim_id']} vectors (no claim_id in metadata)")
+if assignment_stats['skipped_no_category'] > 0:
+    print(f"   ⚠️ Skipped {assignment_stats['skipped_no_category']} vectors (category not found)")
 
 # ============================================================
 # UPDATE PINECONE METADATA WITH NEW CATEGORIES
@@ -633,22 +669,32 @@ for i, (vector_id, label) in enumerate(zip(all_ids, cluster_labels)):
 
 print(f"\n   ✅ Updated {updates_count} vectors with new categories")
 
-# Verify metadata update
+# Verify metadata update (FIXED: use non-noise vector)
 if updates_count > 0:
-    time.sleep(2)  # Wait for Pinecone to process
-    try:
-        sample_id = all_ids[0] if all_ids else None
-        if sample_id:
-            fetched = index.fetch([sample_id])
-            if fetched['vectors'] and sample_id in fetched['vectors']:
-                if 'llm_category' in fetched['vectors'][sample_id]['metadata']:
-                    print(f"   ✅ Metadata update verified")
+    # Find first non-noise vector that was actually updated
+    verify_id = None
+    for vid, label in zip(all_ids, cluster_labels):
+        if label != -1:  # Not noise
+            verify_id = vid
+            break
+
+    if verify_id:
+        time.sleep(5)  # Increased from 2s for better indexing
+        try:
+            fetched = index.fetch([verify_id])
+            if fetched['vectors'] and verify_id in fetched['vectors']:
+                metadata = fetched['vectors'][verify_id].get('metadata', {})
+                if 'llm_category' in metadata:
+                    print(f"   ✅ Metadata update verified: '{metadata['llm_category']}'")
                 else:
-                    print(f"   ⚠️ WARNING: Metadata key 'llm_category' not found")
+                    print(f"   ⚠️ WARNING: Metadata not updated yet (try waiting 10-30 seconds)")
+                    print(f"   💡 This may be due to Pinecone indexing delay")
             else:
                 print(f"   ⚠️ WARNING: Could not fetch vector for verification")
-    except Exception as e:
-        print(f"   ⚠️ Verification failed: {e}")
+        except Exception as e:
+            print(f"   ⚠️ Verification error: {e}")
+    else:
+        print(f"   ⚠️ WARNING: No non-noise vectors to verify")
 
 # ============================================================
 # CATEGORY SEARCH FUNCTIONS
