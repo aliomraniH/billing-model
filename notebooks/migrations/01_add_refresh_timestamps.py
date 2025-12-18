@@ -49,7 +49,8 @@ print("   5. Populate initial timestamp values")
 print("\n" + "=" * 70 + "\n")
 
 try:
-    with engine.connect() as conn:
+    # Use engine.begin() for automatic transaction management (SQLAlchemy 2.0 compatible)
+    with engine.begin() as conn:
         # ============================================================
         # STEP 1: Add columns to clinical_notes
         # ============================================================
@@ -90,8 +91,6 @@ try:
             print("   ✅ Added embedding_model column")
         else:
             print("   ⚠️  Column embedding_model already exists, skipping")
-
-        conn.commit()
 
         # ============================================================
         # STEP 2: Add columns to claim_categories
@@ -134,8 +133,6 @@ try:
         else:
             print("   ⚠️  Column cluster_version already exists, skipping")
 
-        conn.commit()
-
         # ============================================================
         # STEP 3: Create embedding_refresh_config table
         # ============================================================
@@ -155,7 +152,6 @@ try:
             )
         """))
         print("   ✅ Created embedding_refresh_config table")
-        conn.commit()
 
         # Insert default configurations
         conn.execute(text("""
@@ -169,7 +165,6 @@ try:
             ON CONFLICT (config_name) DO NOTHING
         """))
         print("   ✅ Inserted default refresh configurations")
-        conn.commit()
 
         # ============================================================
         # STEP 4: Create indexes
@@ -199,8 +194,6 @@ try:
         """))
         print("   ✅ Created index on embedding_refresh_config.next_run_at")
 
-        conn.commit()
-
         # ============================================================
         # STEP 5: Populate initial timestamps
         # ============================================================
@@ -224,8 +217,6 @@ try:
         """))
         updated_categories = result.rowcount
         print(f"   ✅ Set last_refreshed_at for {updated_categories:,} categories")
-
-        conn.commit()
 
         # ============================================================
         # VERIFICATION
