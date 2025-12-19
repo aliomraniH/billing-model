@@ -257,7 +257,7 @@ class RefreshManager:
                 SELECT
                     config_name,
                     refresh_interval_hours,
-                    is_enabled,
+                    enabled,
                     last_refresh,
                     description
                 FROM embedding_refresh_config
@@ -272,7 +272,7 @@ class RefreshManager:
                 {
                     'config_name': row[0],
                     'refresh_interval_hours': row[1],
-                    'is_enabled': row[2],
+                    'enabled': row[2],
                     'last_refresh': row[3],
                     'description': row[4]
                 }
@@ -318,7 +318,7 @@ class RefreshManager:
         if rules:
             print("📋 Refresh Rules:")
             for rule in rules:
-                status = "✅ enabled" if rule['is_enabled'] else "❌ disabled"
+                status = "✅ enabled" if rule['enabled'] else "❌ disabled"
                 print(f"   {rule['config_name']}: {rule['refresh_interval_hours']}h ({status})")
             print()
 
