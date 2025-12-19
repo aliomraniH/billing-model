@@ -175,7 +175,7 @@ try:
         conn.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_clinical_notes_last_embedded
             ON clinical_notes(last_embedded_at)
-            WHERE embedding IS NOT NULL
+            WHERE last_embedded_at IS NOT NULL
         """))
         print("   ✅ Created index on clinical_notes.last_embedded_at")
 
@@ -199,12 +199,13 @@ try:
         # ============================================================
         print("\nSTEP 5: Populating initial timestamp values...")
 
-        # Set last_embedded_at for existing embeddings
+        # Set last_embedded_at for existing notes (initialize to created_at)
+        # Note: Embeddings are stored in Pinecone, not Postgres
         result = conn.execute(text("""
             UPDATE clinical_notes
             SET last_embedded_at = created_at
-            WHERE embedding IS NOT NULL
-            AND last_embedded_at IS NULL
+            WHERE last_embedded_at IS NULL
+            AND created_at IS NOT NULL
         """))
         updated_notes = result.rowcount
         print(f"   ✅ Set last_embedded_at for {updated_notes:,} existing notes")
@@ -229,14 +230,14 @@ try:
         result = conn.execute(text("""
             SELECT
                 COUNT(*) as total_notes,
-                COUNT(embedding) as embedded_notes,
+                COUNT(embedding_model) as with_model,
                 COUNT(last_embedded_at) as timestamped_notes
             FROM clinical_notes
         """))
         row = result.fetchone()
         print(f"\nclinical_notes:")
         print(f"   Total notes: {row[0]:,}")
-        print(f"   With embeddings: {row[1]:,}")
+        print(f"   With embedding_model set: {row[1]:,}")
         print(f"   With timestamps: {row[2]:,}")
 
         # Check claim_categories columns
