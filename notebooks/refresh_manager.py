@@ -292,7 +292,7 @@ class RefreshManager:
                 UPDATE claim_categories
                 SET last_refreshed_at = NOW()
                 WHERE category_id = ANY(:category_ids)
-            """))
+            """)
 
             result = conn.execute(query, {"category_ids": category_ids})
             stats.refreshed = result.rowcount
