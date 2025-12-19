@@ -18,11 +18,30 @@ import json
 from datetime import datetime
 from sqlalchemy import create_engine, text
 
+# Add /work to Python path for config imports
+sys.path.insert(0, '/work')
+
 print("=" * 70)
 print("🧪 TEST 1: CONFIGURATION SYSTEM VALIDATION")
 print("=" * 70)
 print(f"Test started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 print("=" * 70 + "\n")
+
+# Verify configuration files exist
+print("📁 Checking configuration file locations...")
+config_files = {
+    'config.py': '/work/config.py',
+    'refresh_manager.py': '/work/refresh_manager.py'
+}
+
+for name, path in config_files.items():
+    if os.path.exists(path):
+        print(f"   ✅ {name}: {path}")
+    else:
+        print(f"   ❌ {name}: NOT FOUND at {path}")
+        sys.exit(1)
+
+print("   ✅ All configuration files found\n")
 
 # ============================================================
 # TEST 1.1: Environment Setup
