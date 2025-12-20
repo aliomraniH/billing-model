@@ -46,20 +46,38 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 # ============================================================
-# CONFIGURATION
+# CONFIGURATION (Dynamic - from config.py)
 # ============================================================
+# Load centralized configuration
+from config import get_config
+
+# Initialize configuration
+cfg = get_config()
+
+# Environment variables
 DATABASE_URL = os.getenv('VERCEL_POSTGRES_URL')
 HF_TOKEN = os.getenv('HF_TOKEN')
 PINECONE_API_KEY = os.getenv('PINECONE_API_KEY')
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
 
-MODEL_ID = os.getenv("HF_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
-EMBEDDING_DIM = int(os.getenv("HF_EMBEDDING_DIM", 384))
-PINECONE_INDEX = "medical-billing-notes"
+# Model configuration (from config system)
+MODEL_ID = cfg.embedding.model_id
+EMBEDDING_DIM = cfg.embedding.dimension
+PINECONE_INDEX = cfg.pinecone.index_name
 
-# Clustering configuration
-MIN_CLUSTER_SIZE = int(os.getenv("MIN_CLUSTER_SIZE", 5))  # Minimum points per cluster
-MIN_SAMPLES = int(os.getenv("MIN_SAMPLES", 2))  # HDBSCAN min_samples
+# Clustering configuration (from config system)
+MIN_CLUSTER_SIZE = cfg.clustering.min_cluster_size
+MIN_SAMPLES = cfg.clustering.min_samples
+ADAPTIVE_SIZING = cfg.clustering.adaptive_sizing
+ADAPTIVE_SIZE_RATIO = cfg.clustering.adaptive_size_ratio
+
+# LLM configuration (from config system)
+CLAUDE_MODEL = cfg.llm.model_id
+CLAUDE_MAX_TOKENS = cfg.llm.max_tokens
+CLAUDE_TEMPERATURE = cfg.llm.temperature
+
+# Refresh configuration (from config system)
+CATEGORY_REFRESH_HOURS = cfg.refresh.category_refresh_hours
 
 # Validate
 missing = []
@@ -73,7 +91,8 @@ if missing:
 if not ANTHROPIC_API_KEY:
     print("⚠️ ANTHROPIC_API_KEY not set - will use generic category names")
 
-print("✅ Environment validated")
+# Print loaded configuration
+cfg.print_config()
 
 # ============================================================
 # INITIALIZE CLIENTS
@@ -122,12 +141,16 @@ hf_client = InferenceClient(
     api_key=HF_TOKEN,
 ) if HF_TOKEN else None
 
-# Anthropic
+# Anthropic client initialization
 anthropic_client = None
+
 if ANTHROPIC_API_KEY:
     from anthropic import Anthropic
     anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
-    print("   ✅ Anthropic: claude-sonnet-4-5-20250929")
+
+    # CLAUDE_MODEL is already loaded from config system
+    print(f"   ✅ Anthropic: {CLAUDE_MODEL}")
+    print(f"   💡 Model configured via config.py or CLAUDE_MODEL env var")
 
 # ============================================================
 # HELPER FUNCTIONS
@@ -250,9 +273,15 @@ print("\n🔬 Clustering with HDBSCAN...")
 
 from sklearn.cluster import HDBSCAN
 
-# Adjust min_cluster_size based on dataset size
-adjusted_min_cluster_size = max(MIN_CLUSTER_SIZE, len(X) // 100)  # At least 1% of data
+# Adjust min_cluster_size based on dataset size to prevent over-clustering
+# Rule of thumb: Each cluster should have at least 1-2% of total data
+recommended_min_size = max(len(X) // 50, 10)  # At least 2% of data, minimum 10
+adjusted_min_cluster_size = max(MIN_CLUSTER_SIZE, recommended_min_size)
+
 print(f"   Parameters: min_cluster_size={adjusted_min_cluster_size}, min_samples={MIN_SAMPLES}")
+if adjusted_min_cluster_size > MIN_CLUSTER_SIZE:
+    print(f"   ℹ️  Adjusted from MIN_CLUSTER_SIZE={MIN_CLUSTER_SIZE} to {adjusted_min_cluster_size} based on dataset size")
+    print(f"   💡 This helps prevent over-clustering and duplicate category names")
 
 clusterer = HDBSCAN(
     min_cluster_size=adjusted_min_cluster_size,
@@ -390,8 +419,9 @@ def label_cluster_with_llm(sample_notes: List[str], cluster_idx: int) -> Dict:
 
     try:
         message = anthropic_client.messages.create(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=500,
+            model=CLAUDE_MODEL,  # From config system
+            max_tokens=CLAUDE_MAX_TOKENS,  # From config system
+            temperature=CLAUDE_TEMPERATURE,  # From config system
             system="You are a medical coding expert. Analyze clinical notes and categorize them. Respond with ONLY valid JSON, no markdown.",
             messages=[{
                 "role": "user",
@@ -448,6 +478,43 @@ for cluster_idx in range(n_clusters):
 print(f"\n✅ Labeled {len(categories)} categories")
 
 # ============================================================
+# DEDUPLICATE CATEGORY NAMES
+# ============================================================
+print("\n🔧 Checking for duplicate category names...")
+
+# Check for duplicates and make names unique
+seen_names = {}
+duplicates_found = 0
+
+for cat in categories:
+    original_name = cat['category_name']
+
+    if original_name in seen_names:
+        # Duplicate found - append cluster index to make unique
+        duplicates_found += 1
+        unique_name = f"{original_name}_{cat['cluster_idx']}"
+
+        print(f"   ⚠️ Duplicate '{original_name}' found in clusters {seen_names[original_name]} and {cat['cluster_idx']}")
+        print(f"      → Renamed to '{unique_name}'")
+
+        cat['category_name'] = unique_name
+        seen_names[unique_name] = cat['cluster_idx']
+    else:
+        seen_names[original_name] = cat['cluster_idx']
+
+if duplicates_found > 0:
+    print(f"\n   ⚠️ Fixed {duplicates_found} duplicate category names")
+    print(f"   ℹ️  Consider increasing MIN_CLUSTER_SIZE to reduce over-clustering")
+else:
+    print(f"   ✅ No duplicate category names found")
+
+# Warn about over-clustering
+if n_clusters > 20:
+    print(f"\n   ⚠️ WARNING: {n_clusters} clusters may be too granular")
+    print(f"   💡 Consider increasing MIN_CLUSTER_SIZE (current: {adjusted_min_cluster_size})")
+    print(f"   💡 Recommended: MIN_CLUSTER_SIZE >= {len(X) // 50} for {len(X)} vectors")
+
+# ============================================================
 # CREATE DATABASE TABLES
 # ============================================================
 print("\n📋 Creating database tables...")
@@ -491,10 +558,16 @@ print("\n📊 Populating categories...")
 
 with engine.begin() as conn:
     for cat in categories:
-        # Insert category
+        # UPSERT: Insert or update if category_name already exists
         result = conn.execute(text("""
             INSERT INTO claim_categories (category_name, display_name, description, centroid_json, claim_count)
             VALUES (:name, :display, :desc, :centroid, :count)
+            ON CONFLICT (category_name) DO UPDATE SET
+                display_name = EXCLUDED.display_name,
+                description = EXCLUDED.description,
+                centroid_json = EXCLUDED.centroid_json,
+                claim_count = EXCLUDED.claim_count,
+                created_at = NOW()
             RETURNING category_id
         """), {
             'name': cat['category_name'],
@@ -512,19 +585,32 @@ with engine.begin() as conn:
 # ============================================================
 print("\n🔗 Assigning claims to categories (database)...")
 
+# Track statistics for diagnostics
+assignment_stats = {
+    'assigned': 0,
+    'skipped_noise': 0,
+    'skipped_no_claim_id': 0,
+    'skipped_no_category': 0,
+    'duplicate_updates': 0,
+}
+
 with engine.begin() as conn:
-    assigned_count = 0
     for i, (vector_id, metadata, label) in enumerate(zip(all_ids, all_metadata, cluster_labels)):
         if label == -1:  # Skip noise
+            assignment_stats['skipped_noise'] += 1
             continue
 
         claim_id = metadata.get('claim_id')
         if not claim_id:
+            assignment_stats['skipped_no_claim_id'] += 1
+            if assignment_stats['skipped_no_claim_id'] <= 3:  # Show first 3
+                print(f"   ⚠️ Vector {vector_id} has no claim_id in metadata")
             continue
 
         # Find category
         cat = next((c for c in categories if c['cluster_idx'] == label), None)
         if not cat:
+            assignment_stats['skipped_no_category'] += 1
             continue
 
         # Calculate similarity to centroid
@@ -532,20 +618,30 @@ with engine.begin() as conn:
         centroid = np.array(cat['centroid'])
         similarity = float(np.dot(vec, centroid) / (np.linalg.norm(vec) * np.linalg.norm(centroid)))
 
-        # Insert membership
-        conn.execute(text("""
-            INSERT INTO claim_category_membership (claim_id, category_id, similarity_score)
-            VALUES (:cid, :cat_id, :sim)
-            ON CONFLICT (claim_id, category_id) DO UPDATE SET
-                similarity_score = EXCLUDED.similarity_score
-        """), {
-            'cid': claim_id,
-            'cat_id': cat['category_id'],
-            'sim': similarity
-        })
-        assigned_count += 1
+        # Insert membership (track if update vs insert)
+        try:
+            result = conn.execute(text("""
+                INSERT INTO claim_category_membership (claim_id, category_id, similarity_score)
+                VALUES (:cid, :cat_id, :sim)
+                ON CONFLICT (claim_id, category_id) DO UPDATE SET
+                    similarity_score = EXCLUDED.similarity_score
+                RETURNING membership_id
+            """), {
+                'cid': claim_id,
+                'cat_id': cat['category_id'],
+                'sim': similarity
+            })
+            assignment_stats['assigned'] += 1
+        except Exception as e:
+            print(f"   ⚠️ Error assigning claim {claim_id}: {e}")
 
-print(f"   ✅ Assigned {assigned_count} claims to categories")
+print(f"   ✅ Assigned {assignment_stats['assigned']} claims to categories")
+if assignment_stats['skipped_noise'] > 0:
+    print(f"   ℹ️  Skipped {assignment_stats['skipped_noise']} noise points (expected)")
+if assignment_stats['skipped_no_claim_id'] > 0:
+    print(f"   ⚠️ Skipped {assignment_stats['skipped_no_claim_id']} vectors (no claim_id in metadata)")
+if assignment_stats['skipped_no_category'] > 0:
+    print(f"   ⚠️ Skipped {assignment_stats['skipped_no_category']} vectors (category not found)")
 
 # ============================================================
 # UPDATE PINECONE METADATA WITH NEW CATEGORIES
@@ -584,22 +680,32 @@ for i, (vector_id, label) in enumerate(zip(all_ids, cluster_labels)):
 
 print(f"\n   ✅ Updated {updates_count} vectors with new categories")
 
-# Verify metadata update
+# Verify metadata update (FIXED: use non-noise vector)
 if updates_count > 0:
-    time.sleep(2)  # Wait for Pinecone to process
-    try:
-        sample_id = all_ids[0] if all_ids else None
-        if sample_id:
-            fetched = index.fetch([sample_id])
-            if fetched['vectors'] and sample_id in fetched['vectors']:
-                if 'llm_category' in fetched['vectors'][sample_id]['metadata']:
-                    print(f"   ✅ Metadata update verified")
+    # Find first non-noise vector that was actually updated
+    verify_id = None
+    for vid, label in zip(all_ids, cluster_labels):
+        if label != -1:  # Not noise
+            verify_id = vid
+            break
+
+    if verify_id:
+        time.sleep(5)  # Increased from 2s for better indexing
+        try:
+            fetched = index.fetch([verify_id])
+            if fetched['vectors'] and verify_id in fetched['vectors']:
+                metadata = fetched['vectors'][verify_id].get('metadata', {})
+                if 'llm_category' in metadata:
+                    print(f"   ✅ Metadata update verified: '{metadata['llm_category']}'")
                 else:
-                    print(f"   ⚠️ WARNING: Metadata key 'llm_category' not found")
+                    print(f"   ⚠️ WARNING: Metadata not updated yet (try waiting 10-30 seconds)")
+                    print(f"   💡 This may be due to Pinecone indexing delay")
             else:
                 print(f"   ⚠️ WARNING: Could not fetch vector for verification")
-    except Exception as e:
-        print(f"   ⚠️ Verification failed: {e}")
+        except Exception as e:
+            print(f"   ⚠️ Verification error: {e}")
+    else:
+        print(f"   ⚠️ WARNING: No non-noise vectors to verify")
 
 # ============================================================
 # CATEGORY SEARCH FUNCTIONS

@@ -38,24 +38,35 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 # ============================================================
-# CONFIGURATION
+# CONFIGURATION (Dynamic - from config.py)
 # ============================================================
+# Load centralized configuration
+from config import get_config
+
+# Initialize configuration
+cfg = get_config()
+
+# Environment variables (still required)
 DATABASE_URL = os.getenv('VERCEL_POSTGRES_URL')
 HF_TOKEN = os.getenv('HF_TOKEN')
 PINECONE_API_KEY = os.getenv('PINECONE_API_KEY')
 
-# Model configuration
-MODEL_ID = os.getenv("HF_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
-EMBEDDING_DIM = int(os.getenv("HF_EMBEDDING_DIM", 384))
-PINECONE_INDEX = "medical-billing-notes"
+# Model configuration (from config system)
+MODEL_ID = cfg.embedding.model_id
+EMBEDDING_DIM = cfg.embedding.dimension
+PINECONE_INDEX = cfg.pinecone.index_name
 
-# Processing configuration
-BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", 100))  # Process in batches
-MAX_CLAIMS_TO_PROCESS = int(os.getenv("MAX_CLAIMS_TO_PROCESS", 1000))  # Set to -1 for all claims
-RETRY_ATTEMPTS = 3
-RETRY_DELAY = 2  # seconds
+# Processing configuration (from config system)
+BATCH_SIZE = cfg.embedding.batch_size
+MAX_CLAIMS_TO_PROCESS = cfg.processing.max_claims_to_process
+RETRY_ATTEMPTS = cfg.embedding.max_retries
+RETRY_DELAY = cfg.embedding.retry_delay_seconds
 
-# Validate
+# Refresh configuration (from config system)
+AUTO_REFRESH = cfg.refresh.auto_refresh_enabled
+REFRESH_INTERVAL_HOURS = cfg.refresh.default_embedding_refresh_hours
+
+# Validate environment variables
 missing = []
 if not DATABASE_URL: missing.append("VERCEL_POSTGRES_URL")
 if not HF_TOKEN: missing.append("HF_TOKEN")
@@ -70,9 +81,8 @@ if missing:
     print("   PINECONE_API_KEY: https://www.pinecone.io/ (free signup)")
     raise ValueError(f"Missing: {', '.join(missing)}")
 
-print("✅ All environment variables loaded")
-print(f"   Batch size: {BATCH_SIZE}")
-print(f"   Max claims: {'ALL' if MAX_CLAIMS_TO_PROCESS == -1 else MAX_CLAIMS_TO_PROCESS:,}")
+# Print loaded configuration
+cfg.print_config()
 
 # ============================================================
 # DATABASE CONNECTION (Vercel Postgres)
@@ -247,58 +257,179 @@ with engine.begin() as conn:
 # ============================================================
 print("\n📝 Generating clinical notes for claims...")
 
-# Template-based synthetic note generation
+# Template-based synthetic note generation (EXPANDED for variety)
 NOTE_TEMPLATES = {
     'diabetes': [
         "Patient with Type 2 diabetes mellitus. HbA1c {a1c}%. Blood glucose {bg} mg/dL. {treatment}.",
         "Diabetes follow-up visit. A1C {a1c}%, {complication}. Continue {treatment}.",
         "Uncontrolled diabetes admitted. Blood sugar {bg}. Started on {treatment}.",
+        "DM2 patient reviewed. Hemoglobin A1C {a1c}%, glucose {bg}. Adjust {treatment}.",
+        "Admission for diabetic ketoacidosis. Initial BG {bg}. {treatment} initiated. Recent A1C {a1c}%.",
+        "Outpatient diabetes management. {complication} identified. A1C {a1c}%. Modified {treatment}.",
+        "Hospital admission DM2 uncontrolled. Blood sugar {bg}. A1C {a1c}%. {treatment} started.",
+        "Diabetes clinic visit. Good glycemic control, A1C {a1c}%. {complication}. Continue {treatment}.",
+        "Patient presents with hyperglycemia {bg}. {complication}. A1C {a1c}%. {treatment} adjusted.",
+        "Type 2 diabetes follow-up. HbA1c {a1c}%, blood glucose {bg}. {treatment} regimen.",
     ],
     'cardiac': [
         "Acute chest pain with {symptom}. {finding}. {procedure} performed.",
         "Cardiac catheterization for {indication}. {result}. {treatment}.",
         "{condition} with {complication}. {treatment} initiated.",
+        "Urgent cardiac evaluation. {symptom} noted. {finding} on imaging. {procedure} completed.",
+        "Interventional cardiology: {indication}. {procedure} performed. {result}. {treatment} plan.",
+        "MI protocol initiated. {symptom} present. Cath lab: {finding}. {procedure} successful.",
+        "Cardiac surgery consult. {condition} diagnosis. {procedure} recommended. {treatment} started.",
+        "Post-cath care. {indication} managed with {procedure}. {result}. {treatment} prescribed.",
+        "Cardiology admission for {indication}. {symptom} reported. {finding}. {procedure} done.",
+        "ACS presentation. {symptom} with {finding}. Emergency {procedure}. {result}. {treatment}.",
     ],
     'respiratory': [
         "{condition} with {symptom}. {imaging_finding}. {treatment} administered.",
         "Respiratory failure due to {cause}. {intervention} started.",
         "Admitted for {condition}. {treatment} given. {outcome}.",
+        "Pulmonary consult: {condition}. Chest X-ray shows {imaging_finding}. {intervention} initiated.",
+        "Acute {condition} exacerbation. {symptom} noted. {imaging_finding} on CT. {treatment} started.",
+        "ICU admission respiratory distress. {cause} identified. {intervention} and {treatment}. {outcome}.",
+        "Pulmonology evaluation. {condition} managed. {imaging_finding}. {intervention} applied. {outcome}.",
+        "Respiratory support needed. {cause} diagnosed. {symptom} improved with {treatment}. {outcome}.",
+        "Hospital admission {condition}. {imaging_finding} confirmed. {intervention} therapy. {outcome}.",
+        "Urgent pulmonary care. {condition} with {symptom}. {treatment} and {intervention}. {outcome}.",
     ],
     'orthopedic': [
         "{procedure} for {indication}. {details}. {outcome}.",
         "{joint} replacement surgery. {implant_type}. {postop}.",
         "Orthopedic procedure: {procedure}. {details}. Discharged {outcome}.",
+        "Elective {joint} arthroplasty. {indication} indication. {implant_type} used. {postop}. {outcome}.",
+        "Operative report: {procedure}. {details}. {implant_type} components. {postop} protocol.",
+        "Orthopedic surgery {procedure} completed. {indication}. {details}. {outcome} noted.",
+        "Joint replacement {joint}. Diagnosis {indication}. {implant_type}. Post-op {postop}. {outcome}.",
+        "Surgical intervention {procedure}. {indication} severity. {details} approach. {outcome}.",
+        "Total {joint} replacement performed. {indication}. {implant_type} prosthesis. {postop}.",
+        "{joint} surgery scheduled. {indication} diagnosed. {procedure} completed. {details}. {outcome}.",
     ],
     'gi': [
         "{procedure} performed. {finding}. {treatment}.",
         "GI surgery: {procedure} for {indication}. {outcome}.",
         "{condition} managed with {treatment}. {result}.",
+        "Gastroenterology procedure {procedure} completed. {finding} identified. {treatment} plan.",
+        "Endoscopy suite: {procedure} done. {indication}. {finding} noted. {treatment} recommended.",
+        "GI intervention for {indication}. {procedure} successful. {finding}. {treatment} started.",
+        "Digestive system evaluation. {condition} confirmed. {procedure} performed. {result}.",
+        "Surgical management {procedure}. {indication} indication. {finding} pathology. {outcome}.",
+        "GI consult: {condition}. {procedure} recommended and completed. {finding}. {treatment}.",
+        "Abdominal surgery {procedure}. {indication}. {finding} discovered. {treatment}. {outcome}.",
     ],
 }
 
 FILLERS = {
-    'a1c': ['7.2', '8.5', '9.1', '6.8', '10.2'],
-    'bg': ['180', '220', '150', '280', '195'],
-    'treatment': ['metformin and insulin', 'glipizide', 'insulin therapy', 'lifestyle modifications'],
-    'complication': ['peripheral neuropathy noted', 'retinopathy screening done', 'no complications'],
-    'symptom': ['ST elevation V1-V4', 'inferior wall changes', 'troponin elevation'],
-    'finding': ['90% LAD stenosis', 'RCA occlusion', '3-vessel disease'],
-    'procedure': ['PCI with stent placement', 'CABG', 'cardiac catheterization'],
-    'indication': ['unstable angina', 'STEMI', 'chest pain'],
-    'result': ['successful revascularization', 'stent placed', 'improved flow'],
-    'condition': ['pneumonia', 'COPD exacerbation', 'asthma attack', 'pulmonary embolism'],
-    'imaging_finding': ['bilateral infiltrates', 'right lower lobe consolidation', 'pleural effusion'],
-    'intervention': ['BiPAP', 'mechanical ventilation', 'oxygen therapy'],
-    'outcome': ['improved and discharged', 'stable condition', 'recovery ongoing'],
-    'cause': ['pneumonia', 'COPD', 'acute exacerbation'],
-    'joint': ['Right knee', 'Left hip', 'Right shoulder', 'Left knee'],
-    'implant_type': ['cemented prosthesis', 'uncemented components', 'hybrid fixation'],
-    'postop': ['PT started POD1', 'recovery uneventful', 'mobilizing well'],
-    'details': ['minimally invasive approach', 'standard technique', 'no complications'],
+    # Diabetes-related values (10+ options each)
+    'a1c': ['6.5', '6.8', '7.0', '7.2', '7.5', '8.0', '8.5', '9.1', '9.8', '10.2', '11.0', '11.5'],
+    'bg': ['140', '150', '165', '180', '195', '210', '220', '245', '260', '280', '310', '350'],
+    'treatment': [
+        'metformin and insulin', 'glipizide', 'insulin therapy', 'lifestyle modifications',
+        'sitagliptin', 'empagliflozin', 'liraglutide', 'glyburide', 'pioglitazone', 'dulaglutide',
+        'semaglutide', 'insulin pump therapy'
+    ],
+    'complication': [
+        'peripheral neuropathy noted', 'retinopathy screening done', 'no complications',
+        'diabetic foot ulcer', 'nephropathy stage 2', 'gastroparesis symptoms',
+        'autonomic neuropathy', 'microalbuminuria detected', 'macular edema',
+        'charcot arthropathy', 'hypoglycemia unawareness'
+    ],
+
+    # Cardiac-related values (10+ options each)
+    'symptom': [
+        'ST elevation V1-V4', 'inferior wall changes', 'troponin elevation',
+        'T wave inversion', 'Q waves anterior', 'LBBB pattern',
+        'atrial fibrillation', 'ventricular tachycardia', 'ST depression lateral',
+        'prolonged QT interval', 'right axis deviation', 'low voltage QRS'
+    ],
+    'finding': [
+        '90% LAD stenosis', 'RCA occlusion', '3-vessel disease',
+        '70% LCx stenosis', 'diagonal branch occlusion', 'diffuse CAD',
+        'ostial lesion RCA', 'bifurcation lesion', 'in-stent restenosis',
+        'total occlusion LAD', 'chronic total occlusion', 'moderate LM disease'
+    ],
+    'procedure': [
+        'PCI with stent placement', 'CABG', 'cardiac catheterization',
+        'balloon angioplasty', 'rotational atherectomy', 'IVUS-guided PCI',
+        'FFR measurement', 'OCT imaging', 'DES placement',
+        'thrombus aspiration', 'kissing stents', 'atherectomy'
+    ],
+    'indication': [
+        'unstable angina', 'STEMI', 'chest pain', 'NSTEMI',
+        'stable angina', 'post-MI evaluation', 'cardiogenic shock',
+        'failed medical therapy', 'positive stress test', 'crescendo angina',
+        'acute coronary syndrome'
+    ],
+    'result': [
+        'successful revascularization', 'stent placed', 'improved flow',
+        'TIMI 3 flow restored', 'no residual stenosis', 'optimal result',
+        'complications noted', 'requires CABG', 'incomplete revascularization',
+        'dissection repaired', 'no-reflow phenomenon', 'successful PCI'
+    ],
+
+    # Respiratory-related values (10+ options each)
+    'condition': [
+        'pneumonia', 'COPD exacerbation', 'asthma attack', 'pulmonary embolism',
+        'acute bronchitis', 'respiratory failure', 'COVID-19 pneumonia',
+        'aspiration pneumonia', 'interstitial lung disease', 'pleural effusion',
+        'spontaneous pneumothorax', 'acute respiratory distress'
+    ],
+    'imaging_finding': [
+        'bilateral infiltrates', 'right lower lobe consolidation', 'pleural effusion',
+        'left upper lobe opacity', 'ground glass opacities', 'hilar lymphadenopathy',
+        'pulmonary edema', 'interstitial markings', 'cavitary lesion',
+        'nodular densities', 'pneumothorax right', 'atelectasis left base'
+    ],
+    'intervention': [
+        'BiPAP', 'mechanical ventilation', 'oxygen therapy',
+        'high-flow nasal cannula', 'chest tube placement', 'bronchoscopy',
+        'nebulizer treatments', 'inhaled corticosteroids', 'antibiotics IV',
+        'prone positioning', 'ECMO support', 'thoracentesis'
+    ],
+    'outcome': [
+        'improved and discharged', 'stable condition', 'recovery ongoing',
+        'transferred to ICU', 'required intubation', 'weaned off oxygen',
+        'discharged on home O2', 'readmission within 30 days', 'full recovery',
+        'chronic oxygen dependence', 'pulmonary rehab referral'
+    ],
+    'cause': [
+        'pneumonia', 'COPD', 'acute exacerbation', 'viral infection',
+        'bacterial infection', 'allergen exposure', 'medication non-compliance',
+        'seasonal triggers', 'smoking relapse', 'environmental factors'
+    ],
+
+    # Orthopedic-related values (10+ options each)
+    'joint': [
+        'Right knee', 'Left hip', 'Right shoulder', 'Left knee',
+        'Right hip', 'Left shoulder', 'Right ankle', 'Left elbow',
+        'bilateral knees', 'bilateral hips', 'cervical spine', 'lumbar spine'
+    ],
+    'implant_type': [
+        'cemented prosthesis', 'uncemented components', 'hybrid fixation',
+        'posterior-stabilized implant', 'cruciate-retaining design', 'ceramic-on-ceramic',
+        'metal-on-polyethylene', 'dual-mobility construct', 'custom implant',
+        'revision components', 'constrained liner'
+    ],
+    'postop': [
+        'PT started POD1', 'recovery uneventful', 'mobilizing well',
+        'weight-bearing as tolerated', 'ROM exercises initiated', 'pain well controlled',
+        'no complications', 'early mobilization', 'discharge POD3',
+        'home health arranged', 'DVT prophylaxis given', 'surgical site clean'
+    ],
+    'details': [
+        'minimally invasive approach', 'standard technique', 'no complications',
+        'anterolateral approach', 'posterior approach', 'computer-navigated',
+        'robotic-assisted', 'direct anterior approach', 'mini-incision',
+        'revision procedure', 'complex primary', 'staged bilateral'
+    ],
 }
 
 def generate_clinical_note(claim_id: int) -> Tuple[str, str]:
-    """Generate a synthetic clinical note for a claim."""
+    """Generate a synthetic clinical note for a claim with unique identifiers."""
+    import datetime
+
     # Randomly choose category
     category = random.choice(list(NOTE_TEMPLATES.keys()))
     template = random.choice(NOTE_TEMPLATES[category])
@@ -308,6 +439,16 @@ def generate_clinical_note(claim_id: int) -> Tuple[str, str]:
     for key, values in FILLERS.items():
         if '{' + key + '}' in note_text:
             note_text = note_text.replace('{' + key + '}', random.choice(values))
+
+    # Add unique identifiers to reduce duplicates
+    visit_date = datetime.date(2024, random.randint(1, 12), random.randint(1, 28))
+    providers = ['Dr. Smith', 'Dr. Johnson', 'Dr. Williams', 'Dr. Brown', 'Dr. Jones',
+                 'Dr. Garcia', 'Dr. Miller', 'Dr. Davis', 'Dr. Rodriguez', 'Dr. Martinez',
+                 'Dr. Hernandez', 'Dr. Lopez']
+    provider = random.choice(providers)
+
+    # Append unique metadata to note
+    note_text = f"{note_text} Visit date: {visit_date}. Attending: {provider}."
 
     # Choose note type
     note_type = random.choice(['discharge', 'encounter', 'procedure', 'operative'])
@@ -366,6 +507,30 @@ for batch_start in range(0, len(claim_ids), BATCH_SIZE):
     with engine.begin() as conn:
         for claim_id in batch_claim_ids:
             try:
+                # Check if embedding needs refresh (if auto-refresh enabled)
+                needs_embedding = True
+                if AUTO_REFRESH:
+                    result = conn.execute(text("""
+                        SELECT last_embedded_at, embedding_model
+                        FROM clinical_notes
+                        WHERE claim_id = :cid
+                        LIMIT 1
+                    """), {'cid': claim_id})
+                    row = result.fetchone()
+
+                    if row and row[0]:
+                        # Calculate age in hours
+                        last_embedded = row[0]
+                        age_hours = (datetime.now(last_embedded.tzinfo) - last_embedded).total_seconds() / 3600
+
+                        # Skip if fresh and model hasn't changed
+                        if age_hours < REFRESH_INTERVAL_HOURS and row[1] == MODEL_ID:
+                            needs_embedding = False
+
+                if not needs_embedding:
+                    stats['total_processed'] += 1
+                    continue
+
                 # Generate synthetic note
                 note_type, note_text = generate_clinical_note(claim_id)
 
@@ -386,6 +551,21 @@ for batch_start in range(0, len(claim_ids), BATCH_SIZE):
                 embedding = get_embedding(note_text)
 
                 if embedding is not None:
+                    # Update timestamp and model version in Postgres
+                    conn.execute(text("""
+                        UPDATE clinical_notes
+                        SET
+                            last_embedded_at = NOW(),
+                            embedding_model = :model,
+                            embedding_version = :version
+                        WHERE claim_id = :cid AND note_type = :ntype
+                    """), {
+                        'cid': claim_id,
+                        'ntype': note_type,
+                        'model': MODEL_ID,
+                        'version': '1.0'  # Track version for future migrations
+                    })
+
                     # Prepare for Pinecone batch upsert
                     vector_id = f"claim_{claim_id}_{note_type}"
                     pinecone_vectors.append({
@@ -394,7 +574,9 @@ for batch_start in range(0, len(claim_ids), BATCH_SIZE):
                         "metadata": {
                             "claim_id": claim_id,
                             "note_type": note_type,
-                            "text_preview": note_text[:200]
+                            "text_preview": note_text[:200],
+                            "embedding_model": MODEL_ID,
+                            "embedded_at": datetime.now().isoformat()
                         }
                     })
                     stats['embeddings_created'] += 1
