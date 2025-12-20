@@ -258,7 +258,7 @@ class RefreshManager:
                     config_name,
                     refresh_interval_hours,
                     enabled,
-                    last_refresh,
+                    last_run_at,
                     description
                 FROM embedding_refresh_config
                 ORDER BY config_name
@@ -273,7 +273,7 @@ class RefreshManager:
                     'config_name': row[0],
                     'refresh_interval_hours': row[1],
                     'enabled': row[2],
-                    'last_refresh': row[3],
+                    'last_run_at': row[3],
                     'description': row[4]
                 }
                 for row in rows
