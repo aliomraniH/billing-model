@@ -42,6 +42,11 @@ from sqlalchemy import create_engine, text
 # ============================================================
 # Load centralized configuration
 from config import get_config
+from utils import (
+    get_embedding, init_database, init_pinecone, init_hf_client,
+    validate_environment_variables, test_embedding_generation,
+    ensure_package_installed
+)
 
 # Initialize configuration
 cfg = get_config()
@@ -67,19 +72,9 @@ AUTO_REFRESH = cfg.refresh.auto_refresh_enabled
 REFRESH_INTERVAL_HOURS = cfg.refresh.default_embedding_refresh_hours
 
 # Validate environment variables
-missing = []
-if not DATABASE_URL: missing.append("VERCEL_POSTGRES_URL")
-if not HF_TOKEN: missing.append("HF_TOKEN")
-if not PINECONE_API_KEY: missing.append("PINECONE_API_KEY")
-
-if missing:
-    print("❌ Missing environment variables:")
-    for var in missing:
-        print(f"   - {var}")
-    print("\n📋 Setup instructions:")
-    print("   HF_TOKEN: https://huggingface.co/settings/tokens (enable 'Inference Providers')")
-    print("   PINECONE_API_KEY: https://www.pinecone.io/ (free signup)")
-    raise ValueError(f"Missing: {', '.join(missing)}")
+required_vars = ['VERCEL_POSTGRES_URL', 'HF_TOKEN', 'PINECONE_API_KEY']
+if not validate_environment_variables(required_vars):
+    raise ValueError("Missing required environment variables")
 
 # Print loaded configuration
 cfg.print_config()
@@ -87,129 +82,22 @@ cfg.print_config()
 # ============================================================
 # DATABASE CONNECTION (Vercel Postgres)
 # ============================================================
-print("\n🔌 Connecting to Vercel Postgres...")
-
-engine = create_engine(DATABASE_URL)
-with engine.connect() as conn:
-    result = conn.execute(text("SELECT COUNT(*) FROM claims"))
-    total_claims = result.fetchone()[0]
-    print(f"   ✅ Connected! Found {total_claims:,} claims in database")
+engine, total_claims = init_database(DATABASE_URL)
 
 # ============================================================
 # PINECONE INITIALIZATION
 # ============================================================
-print("\n🌲 Initializing Pinecone...")
-
-# Auto-install the renamed Pinecone client if it's missing
-import importlib.util
-import subprocess
-import sys
-
-if importlib.util.find_spec("pinecone") is None:
-    print("   📦 Installing Pinecone client...")
-    subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y", "pinecone-client"])
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "pinecone"])
-
-from pinecone import Pinecone, ServerlessSpec
-
-pc = Pinecone(api_key=PINECONE_API_KEY)
-
-# Check if index exists, create if not
-existing_indexes = [idx.name for idx in pc.list_indexes()]
-
-if PINECONE_INDEX not in existing_indexes:
-    print(f"   Creating index '{PINECONE_INDEX}'...")
-    pc.create_index(
-        name=PINECONE_INDEX,
-        dimension=EMBEDDING_DIM,
-        metric="cosine",
-        spec=ServerlessSpec(
-            cloud="aws",
-            region="us-east-1"  # Free tier region
-        )
-    )
-    time.sleep(10)
-    print(f"   ✅ Index created")
-else:
-    print(f"   ✅ Index '{PINECONE_INDEX}' exists")
-
-index = pc.Index(PINECONE_INDEX)
-stats = index.describe_index_stats()
-print(f"   Vectors in index: {stats.total_vector_count:,}")
+pc, index = init_pinecone(PINECONE_API_KEY, PINECONE_INDEX, EMBEDDING_DIM)
 
 # ============================================================
 # HUGGING FACE INFERENCE CLIENT
 # ============================================================
-print(f"\n🤗 Setting up HuggingFace embeddings...")
-print(f"   Model: {MODEL_ID}")
 print(f"   Dimensions: {EMBEDDING_DIM}")
+hf_client = init_hf_client(HF_TOKEN, MODEL_ID)
 
-if importlib.util.find_spec("huggingface_hub") is None:
-    print("   📦 Installing huggingface_hub...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "huggingface_hub"])
-
-from huggingface_hub import HfApi, InferenceClient
-
-# Verify model availability
-try:
-    info = HfApi(token=HF_TOKEN).model_info(MODEL_ID)
-    pipeline = getattr(info, "pipeline_tag", None)
-    print(f"   ✅ Model available (pipeline: {pipeline or 'unknown'})")
-except Exception as exc:
-    print(f"   ⚠️ Could not verify model ({exc})")
-
-hf_client = InferenceClient(
-    provider="hf-inference",
-    api_key=HF_TOKEN,
-)
-
-def get_embedding(text: str, model_id: Optional[str] = None, retry_count: int = 0) -> Optional[np.ndarray]:
-    """
-    Generate embedding using HF Inference API with retry logic.
-
-    Returns None if all retries fail.
-    """
-    model_to_use = model_id or MODEL_ID
-
-    try:
-        result = hf_client.feature_extraction(text, model=model_to_use)
-        embedding = np.array(result)
-
-        # Mean pooling if token-level embeddings returned
-        if embedding.ndim > 1:
-            embedding = embedding.mean(axis=0)
-        embedding = embedding.astype(np.float32)
-
-        # Validate dimension
-        if embedding.shape[0] != EMBEDDING_DIM:
-            raise ValueError(
-                f"Embedding dimension {embedding.shape[0]} != expected {EMBEDDING_DIM}"
-            )
-
-        return embedding
-
-    except Exception as e:
-        if retry_count < RETRY_ATTEMPTS:
-            print(f"\n   ⚠️ API error (attempt {retry_count + 1}/{RETRY_ATTEMPTS}): {e}")
-            time.sleep(RETRY_DELAY * (retry_count + 1))  # Exponential backoff
-            return get_embedding(text, model_id, retry_count + 1)
-        else:
-            print(f"\n   ❌ Failed after {RETRY_ATTEMPTS} attempts: {e}")
-            return None
-
-# Test embedding
-print("\n🧪 Testing embedding generation...")
-try:
-    test_emb = get_embedding("Patient with Type 2 diabetes mellitus")
-    if test_emb is not None:
-        assert test_emb.shape == (EMBEDDING_DIM,)
-        print(f"   ✅ Shape: {test_emb.shape}")
-        print(f"   ✅ Sample: [{test_emb[0]:.4f}, {test_emb[1]:.4f}, ...]")
-    else:
-        raise Exception("Embedding generation failed")
-except Exception as e:
-    print(f"   ❌ FAILED: {e}")
-    raise
+# Test embedding generation
+if not test_embedding_generation(hf_client, MODEL_ID, EMBEDDING_DIM):
+    raise Exception("Embedding generation test failed")
 
 # ============================================================
 # ENSURE CLINICAL_NOTES TABLE
@@ -548,7 +436,10 @@ for batch_start in range(0, len(claim_ids), BATCH_SIZE):
                 stats['notes_created'] += 1
 
                 # Generate embedding
-                embedding = get_embedding(note_text)
+                embedding = get_embedding(
+                    note_text, hf_client, MODEL_ID, EMBEDDING_DIM,
+                    max_retries=RETRY_ATTEMPTS, retry_delay=RETRY_DELAY
+                )
 
                 if embedding is not None:
                     # Update timestamp and model version in Postgres
@@ -679,7 +570,8 @@ def search_similar_notes(
     Returns:
         DataFrame with matching notes and similarity scores
     """
-    query_embedding = get_embedding(query, model_id=model_id)
+    use_model = model_id or MODEL_ID
+    query_embedding = get_embedding(query, hf_client, use_model, EMBEDDING_DIM)
 
     if query_embedding is None:
         return pd.DataFrame()

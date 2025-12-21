@@ -50,6 +50,11 @@ from sqlalchemy import create_engine, text
 # ============================================================
 # Load centralized configuration
 from config import get_config
+from utils import (
+    get_embedding, init_database, init_pinecone, init_hf_client,
+    init_anthropic_client, validate_environment_variables,
+    ensure_package_installed
+)
 
 # Initialize configuration
 cfg = get_config()
@@ -79,17 +84,12 @@ CLAUDE_TEMPERATURE = cfg.llm.temperature
 # Refresh configuration (from config system)
 CATEGORY_REFRESH_HOURS = cfg.refresh.category_refresh_hours
 
-# Validate
-missing = []
-if not DATABASE_URL: missing.append("VERCEL_POSTGRES_URL")
-if not PINECONE_API_KEY: missing.append("PINECONE_API_KEY")
-if not HF_TOKEN: missing.append("HF_TOKEN")
-if missing:
-    raise ValueError(f"Missing required: {', '.join(missing)}")
+# Validate required environment variables
+required_vars = ['VERCEL_POSTGRES_URL', 'PINECONE_API_KEY', 'HF_TOKEN']
+if not validate_environment_variables(required_vars):
+    raise ValueError("Missing required environment variables")
 
-# ANTHROPIC_API_KEY is optional - will use generic names if missing
-if not ANTHROPIC_API_KEY:
-    print("⚠️ ANTHROPIC_API_KEY not set - will use generic category names")
+# ANTHROPIC_API_KEY is optional - validation will note if missing
 
 # Print loaded configuration
 cfg.print_config()
@@ -100,79 +100,21 @@ cfg.print_config()
 print("\n🔌 Initializing connections...")
 
 # Database
-engine = create_engine(DATABASE_URL)
-with engine.connect() as conn:
-    result = conn.execute(text("SELECT COUNT(*) FROM claims"))
-    total_claims = result.fetchone()[0]
-    print(f"   ✅ Postgres: {total_claims:,} claims")
+engine, total_claims = init_database(DATABASE_URL)
 
 # Pinecone
-import importlib.util
-import subprocess
-import sys
-
-if importlib.util.find_spec("pinecone") is None:
-    print("   📦 Installing Pinecone client...")
-    subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y", "pinecone-client"])
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "pinecone"])
-
-from pinecone import Pinecone
-pc = Pinecone(api_key=PINECONE_API_KEY)
-index = pc.Index(PINECONE_INDEX)
-stats = index.describe_index_stats()
-print(f"   ✅ Pinecone: {stats.total_vector_count:,} vectors")
+pc, index = init_pinecone(PINECONE_API_KEY, PINECONE_INDEX, EMBEDDING_DIM)
 
 # HuggingFace
-if importlib.util.find_spec("huggingface_hub") is None:
-    print("   📦 Installing huggingface_hub...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "huggingface_hub"])
+hf_client = init_hf_client(HF_TOKEN, MODEL_ID) if HF_TOKEN else None
 
-from huggingface_hub import HfApi, InferenceClient
-
-try:
-    info = HfApi(token=HF_TOKEN).model_info(MODEL_ID)
-    pipeline = getattr(info, "pipeline_tag", None)
-    print(f"   ✅ HuggingFace: {MODEL_ID} (pipeline: {pipeline or 'unknown'})")
-except Exception as exc:
-    print(f"   ⚠️ Could not verify model availability ({exc})")
-
-hf_client = InferenceClient(
-    provider="hf-inference",
-    api_key=HF_TOKEN,
-) if HF_TOKEN else None
-
-# Anthropic client initialization
-anthropic_client = None
-
-if ANTHROPIC_API_KEY:
-    from anthropic import Anthropic
-    anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
-
-    # CLAUDE_MODEL is already loaded from config system
-    print(f"   ✅ Anthropic: {CLAUDE_MODEL}")
-    print(f"   💡 Model configured via config.py or CLAUDE_MODEL env var")
+# Anthropic
+anthropic_client = init_anthropic_client(ANTHROPIC_API_KEY, CLAUDE_MODEL)
 
 # ============================================================
 # HELPER FUNCTIONS
 # ============================================================
-def get_embedding(text: str, model_id: Optional[str] = None) -> np.ndarray:
-    """Generate embedding using HF Inference API"""
-    if not hf_client:
-        raise ValueError("HF_TOKEN required for embeddings")
-
-    model_to_use = model_id or MODEL_ID
-    result = hf_client.feature_extraction(text, model=model_to_use)
-    embedding = np.array(result)
-    if embedding.ndim > 1:
-        embedding = embedding.mean(axis=0)
-    embedding = embedding.astype(np.float32)
-
-    if embedding.shape[0] != EMBEDDING_DIM:
-        raise ValueError(
-            f"Embedding dimension {embedding.shape[0]} does not match expected {EMBEDDING_DIM}."
-        )
-
-    return embedding
+# Note: get_embedding() is now imported from utils.py
 
 # ============================================================
 # LOAD ALL VECTORS FROM PINECONE (PROPERLY)
@@ -719,7 +661,8 @@ def search_by_category(
     """
     Search for similar claims, optionally filtered by LLM category.
     """
-    query_emb = get_embedding(query, model_id=model_id)
+    use_model = model_id or MODEL_ID
+    query_emb = get_embedding(query, hf_client, use_model, EMBEDDING_DIM)
 
     # Build filter for NEW LLM categories
     filter_dict = None
@@ -754,7 +697,8 @@ def auto_categorize_claim(
     """
     Automatically categorize a new claim based on its clinical note.
     """
-    note_emb = get_embedding(note_text, model_id=model_id)
+    use_model = model_id or MODEL_ID
+    note_emb = get_embedding(note_text, hf_client, use_model, EMBEDDING_DIM)
 
     # Find best matching category by comparing to centroids
     best_cat = None
