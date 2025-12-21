@@ -20,7 +20,8 @@ import subprocess
 import importlib.util
 from typing import Optional, Tuple
 import numpy as np
-from sqlalchemy import create_engine, text, Engine
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 from config import get_config
 
 
