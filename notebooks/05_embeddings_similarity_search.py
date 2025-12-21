@@ -123,11 +123,45 @@ with engine.begin() as conn:
                 note_type VARCHAR(50),
                 note_text TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_embedded_at TIMESTAMP WITH TIME ZONE,
+                embedding_model VARCHAR(255),
+                embedding_version VARCHAR(100),
                 UNIQUE(claim_id, note_type)
             )
         """))
-        print("   ✅ Table created")
+        print("   ✅ Table created with refresh columns")
     else:
+        # Check for required refresh columns
+        result = conn.execute(text("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'clinical_notes'
+            AND column_name IN ('last_embedded_at', 'embedding_model', 'embedding_version')
+        """))
+        existing_columns = {row[0] for row in result}
+
+        # Add missing refresh columns
+        if 'last_embedded_at' not in existing_columns:
+            print("   Adding last_embedded_at column...")
+            conn.execute(text("""
+                ALTER TABLE clinical_notes
+                ADD COLUMN last_embedded_at TIMESTAMP WITH TIME ZONE
+            """))
+
+        if 'embedding_model' not in existing_columns:
+            print("   Adding embedding_model column...")
+            conn.execute(text("""
+                ALTER TABLE clinical_notes
+                ADD COLUMN embedding_model VARCHAR(255)
+            """))
+
+        if 'embedding_version' not in existing_columns:
+            print("   Adding embedding_version column...")
+            conn.execute(text("""
+                ALTER TABLE clinical_notes
+                ADD COLUMN embedding_version VARCHAR(100)
+            """))
+
         # Migration: remove old embedding column if exists
         result = conn.execute(text("""
             SELECT column_name FROM information_schema.columns
@@ -137,8 +171,15 @@ with engine.begin() as conn:
             print("   ⚠️ Migrating from pgvector to Pinecone...")
             conn.execute(text("ALTER TABLE clinical_notes DROP COLUMN IF EXISTS embedding"))
             print("   ✅ Migrated")
-        else:
-            print("   ✅ Table ready")
+
+        # Create index for efficient refresh queries
+        conn.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_clinical_notes_last_embedded
+            ON clinical_notes(last_embedded_at)
+            WHERE last_embedded_at IS NOT NULL
+        """))
+
+        print("   ✅ Table ready")
 
 # ============================================================
 # GENERATE SYNTHETIC CLINICAL NOTES
@@ -351,12 +392,33 @@ else:
 
 print(f"   Will process {claims_to_process:,} claims")
 
-# Check existing notes
+# Check existing notes and refresh status
 with engine.connect() as conn:
     existing_notes = conn.execute(text(
         "SELECT COUNT(*) FROM clinical_notes"
     )).fetchone()[0]
     print(f"   Existing notes in database: {existing_notes:,}")
+
+    # Check refresh status
+    if AUTO_REFRESH:
+        result = conn.execute(text(f"""
+            SELECT
+                COUNT(*) as total,
+                COUNT(CASE WHEN last_embedded_at > NOW() - INTERVAL '{REFRESH_INTERVAL_HOURS} hours' THEN 1 END) as fresh,
+                COUNT(CASE WHEN last_embedded_at <= NOW() - INTERVAL '{REFRESH_INTERVAL_HOURS} hours' OR last_embedded_at IS NULL THEN 1 END) as stale_or_null
+            FROM clinical_notes
+        """))
+        row = result.fetchone()
+
+        print(f"\n   🔄 Auto-refresh enabled (interval: {REFRESH_INTERVAL_HOURS}h)")
+        print(f"   Fresh embeddings (<{REFRESH_INTERVAL_HOURS}h): {row[1]:,} (will be SKIPPED)")
+        print(f"   Stale/missing embeddings: {row[2]:,} (will be PROCESSED)")
+        print(f"\n   💡 To process all claims, either:")
+        print(f"      1. Set AUTO_REFRESH_ENABLED=false in environment")
+        print(f"      2. Run: python notebooks/fix_embeddings_refresh.py --clear-all")
+        print(f"      3. Wait {REFRESH_INTERVAL_HOURS} hours for embeddings to become stale")
+    else:
+        print(f"\n   ⚠️  Auto-refresh DISABLED - all claims will be processed")
 
 # ============================================================
 # PROCESS CLAIMS IN BATCHES
@@ -374,6 +436,7 @@ claim_ids = pd.read_sql(
 # Track statistics
 stats = {
     'total_processed': 0,
+    'skipped_fresh': 0,  # Track how many were skipped due to fresh embeddings
     'notes_created': 0,
     'embeddings_created': 0,
     'errors': 0,
@@ -417,6 +480,7 @@ for batch_start in range(0, len(claim_ids), BATCH_SIZE):
 
                 if not needs_embedding:
                     stats['total_processed'] += 1
+                    stats['skipped_fresh'] += 1
                     continue
 
                 # Generate synthetic note
@@ -507,10 +571,19 @@ final_stats = index.describe_index_stats()
 
 print(f"\n📊 Processing Summary:")
 print(f"   • Total claims processed: {stats['total_processed']:,}")
+print(f"   • Skipped (fresh embeddings): {stats['skipped_fresh']:,}")
 print(f"   • Notes created: {stats['notes_created']:,}")
 print(f"   • Embeddings created: {stats['embeddings_created']:,}")
 print(f"   • Errors: {stats['errors']:,}")
-print(f"   • Success rate: {(stats['embeddings_created']/stats['total_processed']*100):.1f}%")
+
+if stats['total_processed'] > 0:
+    actual_processed = stats['total_processed'] - stats['skipped_fresh']
+    if actual_processed > 0:
+        print(f"   • Success rate: {(stats['embeddings_created']/actual_processed*100):.1f}% (of non-skipped claims)")
+    else:
+        print(f"   • Success rate: N/A (all claims were skipped)")
+else:
+    print(f"   • Success rate: N/A")
 
 elapsed_total = (datetime.now() - stats['start_time']).total_seconds()
 print(f"   • Total time: {elapsed_total:.1f}s ({stats['total_processed']/elapsed_total:.1f} claims/sec)")
@@ -668,6 +741,9 @@ print("\n" + "=" * 70)
 print("✅ NOTEBOOK 05 COMPLETE")
 print("=" * 70)
 
+actual_processed = stats['total_processed'] - stats['skipped_fresh']
+success_rate_text = f"{(stats['embeddings_created']/actual_processed*100):.1f}%" if actual_processed > 0 else "N/A"
+
 print(f"""
 📊 Final Summary:
    • Database: Vercel Postgres (text storage)
@@ -676,19 +752,22 @@ print(f"""
    • Dimensions: {EMBEDDING_DIM}
 
    • Total claims in DB: {total_claims:,}
-   • Claims processed: {stats['total_processed']:,}
+   • Claims evaluated: {stats['total_processed']:,}
+   • Skipped (fresh embeddings): {stats['skipped_fresh']:,}
    • Notes created: {stats['notes_created']:,}
+   • Embeddings created: {stats['embeddings_created']:,}
    • Vectors in Pinecone: {final_stats.total_vector_count:,}
    • Coverage: {coverage_pct:.1f}%
 
    • Processing time: {elapsed_total:.1f}s
    • Average speed: {stats['total_processed']/elapsed_total:.1f} claims/sec
-   • Success rate: {(stats['embeddings_created']/stats['total_processed']*100):.1f}%
+   • Success rate: {success_rate_text} (of non-skipped claims)
 
 ✅ Ready for Notebook 06 (LLM Clustering)!
 
-💡 To process more claims, set environment variable:
-   export MAX_CLAIMS_TO_PROCESS=5000
-   (or -1 for all claims)
+💡 Tips:
+   - To process more claims: export MAX_CLAIMS_TO_PROCESS=5000 (or -1 for all)
+   - To force re-processing: python notebooks/fix_embeddings_refresh.py --clear-all
+   - To disable auto-refresh: export AUTO_REFRESH_ENABLED=false
 """)
 print("=" * 70)
