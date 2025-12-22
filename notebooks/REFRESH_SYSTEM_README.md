@@ -1,5 +1,79 @@
 # Embedding Refresh System - Documentation
 
+## 🚀 Quick Start: Changing Configuration in Deepnote
+
+### Fix config.py Formatting Error (Run Once)
+
+If you encounter `ValueError: Cannot specify ',' with 's'.`, run this in a Deepnote cell:
+
+```python
+# Quick fix for config.py formatting bug
+import os
+
+config_path = '/work/config.py'
+
+with open(config_path, 'r') as f:
+    content = f.read()
+
+# Check if already patched
+if 'max_claims_display = ' in content:
+    print("✅ config.py is already patched!")
+else:
+    # Apply the fix
+    old_code = """        print("\\n⚙️  Processing Configuration:")
+        print(f"   Max claims: {'ALL' if self.processing.max_claims_to_process == -1 else self.processing.max_claims_to_process:,}")
+        print(f"   Batch size: {self.processing.batch_size}")"""
+
+    new_code = """        print("\\n⚙️  Processing Configuration:")
+        max_claims_display = 'ALL' if self.processing.max_claims_to_process == -1 else f'{self.processing.max_claims_to_process:,}'
+        print(f"   Max claims: {max_claims_display}")
+        print(f"   Batch size: {self.processing.batch_size}")"""
+
+    if old_code in content:
+        content = content.replace(old_code, new_code)
+        with open(config_path, 'w') as f:
+            f.write(content)
+        print("✅ config.py patched successfully!")
+
+print("✅ Ready to run Notebook 5!")
+```
+
+### Change Settings with Environment Variables (Recommended)
+
+```python
+# Set configuration BEFORE running Notebook 5
+import os
+
+# Processing settings
+os.environ['MAX_CLAIMS_TO_PROCESS'] = '15000'  # or '-1' for all claims
+os.environ['BATCH_SIZE'] = '100'
+
+# Refresh settings
+os.environ['AUTO_REFRESH_ENABLED'] = 'false'  # 'true' or 'false'
+os.environ['EMBEDDING_REFRESH_HOURS'] = '12'
+
+# Model settings (optional)
+os.environ['HF_EMBEDDING_MODEL'] = 'BAAI/bge-small-en-v1.5'
+os.environ['CLAUDE_MODEL'] = 'claude-sonnet-4-5-20250929'
+
+# Now run Notebook 5
+%run /work/notebooks/05_embeddings_similarity_search.py
+```
+
+**Available Environment Variables:**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAX_CLAIMS_TO_PROCESS` | `1000` | Number of claims to process (`-1` for all) |
+| `AUTO_REFRESH_ENABLED` | `true` | Enable smart refresh system |
+| `EMBEDDING_REFRESH_HOURS` | `12` | Hours before re-embedding |
+| `BATCH_SIZE` | `100` | Batch size for processing |
+| `HF_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model |
+| `CLAUDE_MODEL` | `claude-sonnet-4-5-20250929` | LLM model |
+| `MIN_CLUSTER_SIZE` | `5` | Minimum cluster size |
+| `CATEGORY_REFRESH_HOURS` | `24` | Category refresh interval |
+
+---
+
 ## Problem You're Experiencing
 
 When you run Notebook 5, you see a low success rate like **8.4%** with output like:
