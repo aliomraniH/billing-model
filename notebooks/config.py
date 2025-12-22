@@ -265,7 +265,8 @@ class ModelConfig:
         print(f"   Adaptive sizing: {self.clustering.adaptive_sizing}")
 
         print("\n⚙️  Processing Configuration:")
-        print(f"   Max claims: {'ALL' if self.processing.max_claims_to_process == -1 else self.processing.max_claims_to_process:,}")
+        max_claims_display = 'ALL' if self.processing.max_claims_to_process == -1 else f'{self.processing.max_claims_to_process:,}'
+        print(f"   Max claims: {max_claims_display}")
         print(f"   Batch size: {self.processing.batch_size}")
 
         print("\n💡 To override:")
