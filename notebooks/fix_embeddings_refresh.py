@@ -81,21 +81,29 @@ def show_status(engine):
                 index = pc.Index("medical-billing-notes")
                 stats = index.describe_index_stats()
                 print(f"\n   Vectors in Pinecone: {stats.total_vector_count:,}")
+            except ImportError:
+                print(f"\n   ⚠️  Pinecone module not installed (pip install pinecone)")
             except Exception as e:
                 print(f"\n   ⚠️  Could not check Pinecone: {e}")
 
         return True
 
 
-def clear_all_timestamps(engine):
+def clear_all_timestamps(engine, force=False):
     """Clear all embedding timestamps to force full re-processing"""
     print("\n⚠️  WARNING: This will clear ALL embedding timestamps!")
     print("   All claims will be re-processed on next run.")
 
-    confirm = input("\n   Type 'YES' to confirm: ")
-    if confirm != 'YES':
-        print("   Cancelled.")
-        return
+    if not force:
+        try:
+            confirm = input("\n   Type 'YES' to confirm: ")
+            if confirm != 'YES':
+                print("   Cancelled.")
+                return
+        except (EOFError, KeyboardInterrupt):
+            # Running in non-interactive environment (e.g., notebook)
+            print("   ⚠️ Running in non-interactive mode. Use --yes flag to confirm.")
+            return
 
     with engine.begin() as conn:
         result = conn.execute(text("""
@@ -198,6 +206,7 @@ def main():
     parser.add_argument('--clear-all', action='store_true', help="Clear all timestamps")
     parser.add_argument('--clear-missing', action='store_true', help="Clear timestamps for missing embeddings")
     parser.add_argument('--disable-info', action='store_true', help="Show how to disable auto-refresh")
+    parser.add_argument('--yes', '-y', action='store_true', help="Skip confirmation prompts (for automation)")
 
     args = parser.parse_args()
 
@@ -207,7 +216,7 @@ def main():
         show_status(engine)
 
     if args.clear_all:
-        clear_all_timestamps(engine)
+        clear_all_timestamps(engine, force=args.yes)
         show_status(engine)
 
     if args.clear_missing:
@@ -223,6 +232,7 @@ def main():
         print("   --clear-all       Clear all timestamps (forces full re-processing)")
         print("   --clear-missing   Clear timestamps only for notes missing from Pinecone")
         print("   --disable-info    Show how to disable auto-refresh")
+        print("   --yes, -y         Skip confirmation prompts (use with --clear-all)")
 
     print("\n" + "=" * 70)
 

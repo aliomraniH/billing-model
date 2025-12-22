@@ -56,17 +56,28 @@ auto_refresh_enabled: bool = False  # Changed from True
 
 ### Option 2: Clear All Timestamps (Force Re-processing)
 
-**Use the fix script to reset timestamps:**
-
+**Method A: Command line (with confirmation):**
 ```bash
 # Check current status
 python notebooks/fix_embeddings_refresh.py --status
 
-# Clear all timestamps (will re-process everything)
+# Clear all timestamps (will prompt for confirmation)
 python notebooks/fix_embeddings_refresh.py --clear-all
+
+# Or skip confirmation (for automation/notebooks)
+python notebooks/fix_embeddings_refresh.py --clear-all --yes
 
 # Then run notebook 5 normally
 python notebooks/05_embeddings_similarity_search.py
+```
+
+**Method B: Jupyter/Deepnote notebooks (no confirmation needed):**
+```python
+# In a notebook cell, simply run:
+%run notebooks/clear_embeddings.py
+
+# Or use the command-line version with --yes flag:
+!python notebooks/fix_embeddings_refresh.py --clear-all --yes
 ```
 
 ### Option 3: Clear Only Missing Embeddings
@@ -182,6 +193,29 @@ The notebook now automatically creates missing columns. If you still see errors:
 ```bash
 # Manually run the migration
 python notebooks/migrations/01_add_refresh_timestamps.py
+```
+
+### Running in Jupyter/Deepnote notebooks
+
+If you get confirmation prompt issues or `EOFError`:
+
+```python
+# Use the notebook-friendly script (no confirmation needed):
+%run notebooks/clear_embeddings.py
+
+# OR use the --yes flag:
+!python notebooks/fix_embeddings_refresh.py --clear-all --yes
+```
+
+### "No module named 'pinecone'" warning
+
+This is just a warning - the script will still work. The Pinecone check is optional:
+
+```bash
+# Install pinecone if you want full status checks:
+pip install pinecone
+
+# Or ignore the warning - timestamps are still cleared correctly
 ```
 
 ### All claims being skipped
