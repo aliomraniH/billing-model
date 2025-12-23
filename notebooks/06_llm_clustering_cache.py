@@ -105,6 +105,9 @@ engine, total_claims = init_database(DATABASE_URL)
 # Pinecone
 pc, index = init_pinecone(PINECONE_API_KEY, PINECONE_INDEX, EMBEDDING_DIM)
 
+# Get index statistics
+stats = index.describe_index_stats()
+
 # HuggingFace
 hf_client = init_hf_client(HF_TOKEN, MODEL_ID) if HF_TOKEN else None
 
