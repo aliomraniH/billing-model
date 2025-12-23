@@ -71,7 +71,7 @@ from sqlalchemy.pool import NullPool
 @contextmanager
 def get_db_connection(database_url: str):
     """
-    Context manager for fresh database connections
+    Context manager for fresh database connections with auto-commit
     Prevents timeout errors by creating new connection each time
     """
     # Create engine with no persistent connections
@@ -87,12 +87,12 @@ def get_db_connection(database_url: str):
         }
     )
 
-    conn = engine.connect()
-    try:
-        yield conn
-    finally:
-        conn.close()
-        engine.dispose()
+    # Use begin() instead of connect() - auto-commits on success
+    with engine.begin() as conn:
+        try:
+            yield conn
+        finally:
+            engine.dispose()
 
 
 def insert_memberships_batch(conn, memberships: list):
@@ -638,10 +638,10 @@ for i, (vector_id, metadata, label) in enumerate(zip(all_ids, all_metadata, clus
 
 # STEP 2: Batch insert with FRESH connection (no timeout!)
 # This is 100x faster and prevents connection timeout errors
+# Note: Connection auto-commits on successful exit from context manager
 if memberships:
     with get_db_connection(DATABASE_URL) as conn:
         insert_memberships_batch(conn, memberships)
-        conn.commit()
         assignment_stats['assigned'] = len(memberships)
 
 print(f"   ✅ Assigned {assignment_stats['assigned']} claims to categories")
