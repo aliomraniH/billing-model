@@ -31,7 +31,13 @@ print("✅ Claude API: claude-sonnet-4-5-20250929")
 print("✅ Production-ready with comprehensive testing")
 print("✅ OPTION A FIX: Batch database operations (no timeout!)")
 print("✅ STANDALONE: No external imports - works in Deepnote!")
+print("✅ PERFORMANCE MONITORING: Detailed timing for each stage")
 print("=" * 70 + "\n")
+
+# Performance monitoring
+import time as perf_timer
+stage_times = {}
+notebook_start_time = perf_timer.time()
 
 # ============================================================
 # INSTALL DEPENDENCIES
@@ -161,6 +167,7 @@ cfg.print_config()
 # ============================================================
 # INITIALIZE CLIENTS
 # ============================================================
+init_start = perf_timer.time()
 print("\n🔌 Initializing connections...")
 
 # Database
@@ -178,6 +185,9 @@ hf_client = init_hf_client(HF_TOKEN, MODEL_ID) if HF_TOKEN else None
 # Anthropic
 anthropic_client = init_anthropic_client(ANTHROPIC_API_KEY, CLAUDE_MODEL)
 
+stage_times['initialization'] = perf_timer.time() - init_start
+print(f"⏱️  Initialization: {stage_times['initialization']:.2f}s\n")
+
 # ============================================================
 # HELPER FUNCTIONS
 # ============================================================
@@ -186,6 +196,7 @@ anthropic_client = init_anthropic_client(ANTHROPIC_API_KEY, CLAUDE_MODEL)
 # ============================================================
 # LOAD ALL VECTORS FROM PINECONE (PROPERLY)
 # ============================================================
+load_start = perf_timer.time()
 print("\n📥 Loading vectors from Pinecone...")
 
 # IMPROVED: Use proper pagination instead of dummy vector query
@@ -233,6 +244,9 @@ else:
 
 X = np.array(all_vectors)
 print(f"   ✅ Loaded {len(X)} vectors, shape: {X.shape}")
+
+stage_times['vector_loading'] = perf_timer.time() - load_start
+print(f"⏱️  Vector Loading: {stage_times['vector_loading']:.2f}s")
 
 # ============================================================
 # DATA QUALITY VALIDATION
@@ -867,7 +881,8 @@ for test_note in test_notes:
 print("\n[TEST 4] Database consistency checks")
 print("-" * 50)
 
-with engine.connect() as conn:
+# Use FRESH connection (not the old engine connection)
+with get_db_connection(DATABASE_URL) as conn:
     # Check all categories have claims
     result_check = conn.execute(text("""
         SELECT c.category_name, c.claim_count, COUNT(m.claim_id) as actual_count
@@ -938,8 +953,8 @@ print("\n" + "=" * 70)
 print("✅ NOTEBOOK 06 COMPLETE")
 print("=" * 70)
 
-# Final stats
-with engine.connect() as conn:
+# Final stats - use FRESH connection
+with get_db_connection(DATABASE_URL) as conn:
     cat_count = conn.execute(text("SELECT COUNT(*) FROM claim_categories")).fetchone()[0]
     mem_count = conn.execute(text("SELECT COUNT(*) FROM claim_category_membership")).fetchone()[0]
 
