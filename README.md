@@ -210,6 +210,118 @@ You'll need to install some software on your computer:
 
 ---
 
+## 🐍 Virtual Environment Setup
+
+### Why Use a Virtual Environment?
+
+A virtual environment is an isolated Python environment that keeps this project's dependencies separate from other projects on your computer. Here's why it's important:
+
+| Benefit | Description |
+|---------|-------------|
+| **Isolation** | Each project has its own dependencies, avoiding conflicts between projects |
+| **Reproducibility** | Ensures everyone working on the project uses the exact same package versions |
+| **Clean System** | Keeps your system Python installation clean and uncluttered |
+| **Easy Cleanup** | Simply delete the `venv` folder to remove all project dependencies |
+
+### Installing Virtual Environment Tools
+
+#### Option 1: Built-in `venv` (Recommended)
+
+If you have **Python 3.3 or newer**, the `venv` module is already built-in. No installation needed!
+
+To verify your Python version:
+```bash
+python --version
+# or
+python3 --version
+```
+
+#### Option 2: Installing `virtualenv` Package
+
+If you prefer `virtualenv` or are using an older Python version:
+
+**Windows:**
+```cmd
+pip install virtualenv
+```
+
+**Mac/Linux:**
+```bash
+pip3 install virtualenv
+```
+
+### Creating a Virtual Environment
+
+Navigate to the project folder first, then create the virtual environment:
+
+#### Windows (Command Prompt)
+
+```cmd
+cd billing-model
+python -m venv venv
+```
+
+#### Windows (PowerShell)
+
+```powershell
+cd billing-model
+python -m venv venv
+```
+
+#### Mac/Linux
+
+```bash
+cd billing-model
+python3 -m venv venv
+```
+
+**What this does:** Creates a folder called `venv` containing a fresh Python installation
+
+### Activating the Virtual Environment
+
+You must activate the virtual environment **every time** you open a new terminal to work on this project.
+
+#### Windows (Command Prompt)
+
+```cmd
+venv\Scripts\activate.bat
+```
+
+#### Windows (PowerShell)
+
+```powershell
+.\venv\Scripts\Activate.ps1
+```
+
+**Note:** If you get an error about execution policies, run this first:
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+#### Mac/Linux
+
+```bash
+source venv/bin/activate
+```
+
+**How to know it worked:** Your terminal prompt will change to show `(venv)` at the beginning:
+```
+(venv) C:\Users\YourName\billing-model>   # Windows
+(venv) user@computer:~/billing-model$     # Mac/Linux
+```
+
+### Deactivating the Virtual Environment
+
+When you're done working on the project:
+
+```bash
+deactivate
+```
+
+**What this does:** Returns to your system Python. The `(venv)` prefix will disappear.
+
+---
+
 ## 📚 Step-by-Step Setup Guide
 
 Follow these instructions **exactly** in order. Each step builds on the previous one.
@@ -266,29 +378,62 @@ cd billing-model
 
 ---
 
-### Part 2: Install Required Software (15 minutes)
+### Part 2: Set Up Virtual Environment & Install Dependencies (15 minutes)
 
-#### Step 2.1: Install Python Libraries
+#### Step 2.1: Create Virtual Environment
 
-Copy and paste this **entire block** and press Enter:
+Make sure you're in the project folder, then create a virtual environment:
 
+**Mac/Linux:**
 ```bash
-pip install numpy pandas sqlalchemy psycopg2-binary
-pip install pinecone-client huggingface_hub anthropic
-pip install scikit-learn requests
+python3 -m venv venv
 ```
 
-**What this does:** Installs all the helper tools the system needs
+**Windows:**
+```cmd
+python -m venv venv
+```
+
+**What this does:** Creates an isolated Python environment for this project
+
+#### Step 2.2: Activate Virtual Environment
+
+**Mac/Linux:**
+```bash
+source venv/bin/activate
+```
+
+**Windows (Command Prompt):**
+```cmd
+venv\Scripts\activate.bat
+```
+
+**Windows (PowerShell):**
+```powershell
+.\venv\Scripts\Activate.ps1
+```
+
+**How to verify:** Your prompt should now start with `(venv)`
+
+#### Step 2.3: Install Python Libraries
+
+With the virtual environment activated, install all dependencies using the requirements file:
+
+```bash
+pip install -r requirements.txt
+```
+
+**What this does:** Installs all the helper tools the system needs from the `requirements.txt` file
 
 **What you'll see:** Lots of text scrolling - this is normal!
 
 **If you see "pip: command not found":**
 - Try `pip3` instead of `pip`
-- On Windows, try `python -m pip install ...` instead
+- On Windows, try `python -m pip install -r requirements.txt` instead
 
 **How long:** 5-10 minutes depending on your internet speed
 
-#### Step 2.2: Verify Installation
+#### Step 2.4: Verify Installation
 
 Type this command:
 
@@ -298,7 +443,9 @@ python -c "import numpy, pandas, sqlalchemy; print('✅ All libraries installed!
 
 **Expected output:** `✅ All libraries installed!`
 
-**If you see an error:** Go back to Step 2.1 and make sure it completed without errors
+**If you see an error:** Go back to Step 2.3 and make sure it completed without errors
+
+**Remember:** You must activate the virtual environment every time you open a new terminal!
 
 ---
 
@@ -1183,6 +1330,7 @@ Here's what each file and folder does:
 ```
 billing-model/
 ├── README.md                              # ← This file!
+├── requirements.txt                       # Python dependencies (pip install -r requirements.txt)
 │
 ├── notebooks/                             # Main code folder
 │   ├── config.py                         # Settings and configuration
@@ -1474,12 +1622,22 @@ MIT License - Free to use for any purpose
 
 **Copy this and keep it handy!**
 
+### Mac/Linux Quick Setup
+
 ```bash
-# ====== SETUP (One Time) ======
-cd ~/billing-model/notebooks
+# ====== VIRTUAL ENVIRONMENT (One Time) ======
+cd ~/billing-model
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# ====== ENVIRONMENT VARIABLES ======
 export VERCEL_POSTGRES_URL="postgresql://..."
 export HF_TOKEN="hf_..."
 export PINECONE_API_KEY="..."
+
+# ====== DATABASE SETUP (One Time) ======
+cd notebooks
 python 01_setup_database.py
 python 02_load_synthea_data.py
 
@@ -1495,16 +1653,42 @@ python -c "from utils import init_database; import os; engine, total = init_data
 # ====== MAINTENANCE ======
 python refresh_manager.py --check
 python refresh_manager.py --refresh-embeddings --max-refresh 1000
+
+# ====== DAILY USE ======
+cd ~/billing-model
+source venv/bin/activate  # Activate venv each new terminal session
+```
+
+### Windows Quick Setup
+
+```cmd
+:: ====== VIRTUAL ENVIRONMENT (One Time) ======
+cd %USERPROFILE%\billing-model
+python -m venv venv
+venv\Scripts\activate.bat
+pip install -r requirements.txt
+
+:: ====== ENVIRONMENT VARIABLES ======
+set VERCEL_POSTGRES_URL=postgresql://...
+set HF_TOKEN=hf_...
+set PINECONE_API_KEY=...
+
+:: ====== Then follow same steps as Mac/Linux ======
 ```
 
 ---
 
-**Last Updated:** December 23, 2025
-**Version:** 2.1 (Production Optimizations)
+**Last Updated:** December 24, 2025
+**Version:** 2.2 (Added requirements.txt and Virtual Environment)
 **Status:** ✅ Production Ready
 **Branch:** `claude/fix-notebook-6-error-SvwC5`
 
-**Recent Changes (v2.1):**
+**Recent Changes (v2.2):**
+- Added `requirements.txt` for easy dependency installation
+- Added comprehensive virtual environment setup guide for Windows, macOS, and Linux
+- Updated installation instructions to use `pip install -r requirements.txt`
+
+**Previous Changes (v2.1):**
 - Fixed critical database timeout errors in notebook 6
 - 100x performance improvement in database operations (batch inserts)
 - 80% overall speedup through fresh connection pattern
