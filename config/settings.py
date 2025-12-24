@@ -13,10 +13,11 @@ RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
 REPORTS_DIR = PROJECT_ROOT / "reports"
 
-# Database
+# Database - Use Vercel Postgres (Neon) for cloud deployment
+# Supports both VERCEL_POSTGRES_URL (Deepnote/cloud) and DATABASE_URL (local)
 DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://billing_admin:zerocost_secure_pwd@localhost:5432/billing_db"
+    "VERCEL_POSTGRES_URL",
+    os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/dbname")
 )
 
 # Models
