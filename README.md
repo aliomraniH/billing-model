@@ -92,6 +92,71 @@ This system automates claim categorization by:
 
 ---
 
+## 🧠 NLP Clinical Code Suggestion System
+
+**NEW:** Phase 2 adds intelligent medical billing code extraction and validation.
+
+### Features
+
+- **Automated Code Extraction**: Extract ICD-10 and HCPCS codes from clinical notes using medspaCy + BioClinical ModernBERT
+- **Semantic Similarity Search**: Find matching codes via pgvector (HNSW index) with <5ms query time
+- **Cluster Consensus Suggestions**: Weak supervision algorithm suggests codes based on similar claims
+- **Gap Analysis**: Identify revenue leakage (documented but not billed) and compliance risks
+- **Negation Detection**: ConText-aware entity extraction filters out negated conditions
+
+### NLP Technology Stack
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Clinical NLP | medspaCy + scispaCy | Medical entity extraction |
+| Embeddings | BioClinical ModernBERT (768-dim) | Semantic code matching |
+| Vector Store | pgvector (in Vercel Postgres) | Fast similarity search |
+| De-identification | Microsoft Presidio | HIPAA compliance |
+| Code Sources | CMS ICD-10-CM, HCPCS Level II | Public domain, free |
+
+### Quick Start - NLP System
+
+```bash
+# 1. Install NLP dependencies
+pip install -r requirements.txt
+python -m spacy download en_core_web_sm
+
+# 2. Verify setup
+python notebooks/00_verify_nlp_dependencies.py
+
+# 3. Build knowledge base (one-time, 10-20 min)
+python notebooks/07_nlp_knowledge_base_setup.py
+
+# 4. Extract codes from claims
+python notebooks/08_nlp_code_extraction.py
+
+# 5. Run gap analysis
+python notebooks/09_gap_analysis_reporting.py
+```
+
+### Example Output
+
+```
+📊 GAP ANALYSIS SUMMARY
+═══════════════════════════════════════
+Claims analyzed: 1,000
+Claims with issues: 287 (28.7%)
+
+💰 Revenue Impact:
+  Revenue leakage flags: 156
+  Compliance risk flags: 73
+  Estimated revenue impact: $23,400
+
+⚠️  Risk Distribution:
+  High risk (>=0.5): 45 claims
+  Medium risk (0.25-0.5): 98 claims
+  Low risk (<0.25): 857 claims
+```
+
+**See [NLP_SYSTEM_README.md](NLP_SYSTEM_README.md) for detailed documentation.**
+
+---
+
 ## Quick Start
 
 ### Prerequisites

@@ -1,7 +1,7 @@
 # Medical Billing ML - Git Ignore
 
 # Data files (large datasets, local caches)
-data/
+/data/
 *.csv
 *.parquet
 *.feather
