@@ -1,0 +1,30 @@
+{
+  "buildCommand": "bash scripts/vercel_predeploy.sh",
+  "installCommand": "pip install -r requirements.txt",
+  "framework": null,
+  "functions": {
+    "api/**/*.py": {
+      "runtime": "python3.11",
+      "maxDuration": 60
+    }
+  },
+  "env": {
+    "VERCEL_POSTGRES_URL": "@postgres-url",
+    "BLOB_READ_WRITE_TOKEN": "@blob-token",
+    "KV_REST_API_URL": "@kv-url",
+    "KV_REST_API_TOKEN": "@kv-token",
+    "HF_TOKEN": "@hf-token"
+  },
+  "build": {
+    "env": {
+      "PYTHON_VERSION": "3.11"
+    }
+  },
+  "regions": ["iad1"],
+  "crons": [
+    {
+      "path": "/api/health",
+      "schedule": "0 */6 * * *"
+    }
+  ]
+}
