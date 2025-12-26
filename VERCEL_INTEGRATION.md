@@ -156,7 +156,29 @@ pytest tests/ -v --cov=src
 
 ## 🎯 Quick Start
 
-### First-Time Setup
+### For Deepnote Users
+
+**You're in Deepnote!** Don't run bash commands. Instead:
+
+1. **Open the Deepnote setup notebook:**
+   ```python
+   # In a Deepnote cell, run:
+   %run notebooks/00_deepnote_setup.py
+   ```
+
+2. **Follow the interactive guide** - it will walk you through:
+   - Adding environment variables in Deepnote UI (⚙️ → Environment variables)
+   - Installing dependencies
+   - Verifying setup
+   - Testing database connection
+
+**See detailed guide:** [docs/DEEPNOTE_SETUP.md](docs/DEEPNOTE_SETUP.md)
+
+---
+
+### For Local/Production Deployment
+
+If you're deploying to Vercel (not using Deepnote), follow this:
 
 1. **Link Vercel Project**
    ```bash
