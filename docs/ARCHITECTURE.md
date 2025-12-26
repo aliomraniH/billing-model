@@ -1,310 +1,609 @@
-# Architecture Documentation
+# Notebook 6 Architecture Improvements
+## Production-Ready Processing Strategy
 
-## System Overview
+## Current Bottlenecks Analysis
 
-The Medical Billing ML system is a browser-based machine learning pipeline designed for analyzing medical claims data. All components are managed services to minimize operational overhead and stay within a $50/month budget.
+### 1. **Sequential Processing** (Current: ~5-10 minutes)
+- ❌ Load 10k vectors → Cluster → Label → DB writes → Pinecone updates (sequential)
+- ❌ Single DB connection held open for entire duration → timeout errors
+- ❌ No checkpointing → must restart from beginning on failure
+- ❌ 7,974 individual Pinecone updates (could be batched)
+- ❌ 7,974 individual DB inserts (could be batched)
 
-## Architecture Diagram
+### 2. **Resource Inefficiency**
+- ❌ DB connection open but idle during clustering (2-3 min)
+- ❌ DB connection open but idle during LLM API calls
+- ❌ Single-threaded LLM labeling (3 sequential API calls, ~9 seconds)
 
+### 3. **Cost Inefficiency**
+- ❌ Re-clusters all data even if only new vectors added
+- ❌ No caching of LLM labels or cluster assignments
+- ❌ Unnecessary API calls on re-runs
+
+---
+
+## Proposed Architecture: Stage-Based Processing
+
+### **Stage 1: Data Loading & Validation** (~30s)
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Google Colab Notebooks                     │
-│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────────┐   │
-│  │ Data Loader │  │ Model Trainer│  │ Prediction Generator│   │
-│  └──────┬──────┘  └──────┬───────┘  └──────────┬──────────┘   │
-│         │                │                      │               │
-└─────────┼────────────────┼──────────────────────┼───────────────┘
-          │                │                      │
-          ▼                ▼                      ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Vercel Postgres + pgvector                   │
-│  ┌──────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐ │
-│  │  Claims  │  │ Diagnoses  │  │ Procedures │  │  Clinical  │ │
-│  │          │  │            │  │            │  │   Notes    │ │
-│  └──────────┘  └────────────┘  └────────────┘  └────────────┘ │
-│                                                                 │
-│  ┌────────────────────────────────────────────────────────┐   │
-│  │ Predictions Table (Model Outputs + Metadata)           │   │
-│  └────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
-          │                                      │
-          │                                      │
-          ▼                                      ▼
-┌──────────────────────┐              ┌──────────────────────┐
-│  Hugging Face Hub    │              │  Training Data       │
-│  • Model Registry    │              │  • Synthea (free)    │
-│  • Dataset Storage   │              │  • MIMIC-IV (cred)   │
-│  • AutoTrain Jobs    │              │  • CMS DE-SynPUF     │
-└──────────────────────┘              └──────────────────────┘
+┌─────────────────────────────────────┐
+│ 1. Load vectors from Pinecone       │
+│ 2. Validate data quality            │
+│ 3. Cache to disk: vectors.npz       │
+│ 4. Close Pinecone connection        │
+└─────────────────────────────────────┘
+         ↓ Checkpoint saved
 ```
 
-## Technology Selection Rationale
+**Benefits:**
+- ✅ Can resume from cached vectors
+- ✅ No Pinecone connection held during clustering
+- ✅ Fast re-runs during development
 
-### Database: Vercel Postgres (Neon)
-
-**Why Chosen:**
-- Serverless Postgres with pgvector 0.8.0 pre-installed
-- Free tier: 512 MB storage, 60 hours compute/month
-- No IP allowlisting required (works from Google Colab)
-- Direct connection support (not just pooled)
-- Automatic backups and point-in-time recovery
-
-**Alternatives Considered:**
-- **Supabase**: Similar features but less generous free tier compute limits
-- **AWS RDS**: Requires VPC setup, minimum $15/month, overkill for prototype
-- **PlanetScale**: MySQL-based, no native vector support
-
-**Limitations:**
-- 512 MB storage limit on free tier (upgrade to Pro at $20/mo for 10 GB if needed)
-- Connection limits (can hit with concurrent Colab sessions)
-
-### Vector Store: pgvector
-
-**Why Chosen:**
-- Integrated with Postgres (single database for relational + embeddings)
-- Supports up to 2000 dimensions (we use 384 for all-MiniLM-L6-v2)
-- HNSW indexing for fast approximate nearest neighbor search
-- Cosine, L2, and inner product distance metrics
-
-**Alternatives Considered:**
-- **Pinecone**: $70/month for 1M vectors, overkill for prototype scale
-- **Qdrant**: Requires separate service deployment
-- **Weaviate**: Complex setup for managed deployment
-
-**Limitations:**
-- Performance degrades beyond ~1M vectors without tuning
-- HNSW index creation can be slow for large datasets
-
-### Development Environment: Google Colab Pro
-
-**Why Chosen:**
-- $9.99/month for GPU access (T4, V100, A100 when available)
-- 24-hour session limits (vs 12 hours on free tier)
-- Built-in secrets management
-- No local environment setup required
-- Jupyter notebook interface familiar to data scientists
-
-**Alternatives Considered:**
-- **Kaggle Notebooks**: Free GPU but limited session time, no secrets management
-- **Paperspace Gradient**: $8/month but requires more setup
-- **Saturn Cloud**: Free tier too limited
-
-**Limitations:**
-- Sessions disconnect after 24 hours (need to re-run initialization)
-- No persistent file storage (must save models to Hugging Face or Google Drive)
-- Can't run background jobs
-
-### AutoML: Hugging Face AutoTrain
-
-**Why Chosen:**
-- Pay-per-use compute (only pay when training)
-- Supports tabular data + NLP tasks
-- Integrates with Hugging Face Hub for dataset/model versioning
-- No infrastructure management
-
-**Alternatives Considered:**
-- **Google AutoML**: $20/hour minimum, expensive for prototyping
-- **Azure ML**: Complex setup, enterprise-focused pricing
-- **AWS SageMaker Autopilot**: Minimum $0.17/hour, requires AWS setup
-
-**Estimated Costs:**
-- Tabular classification: ~$2-5 per training run
-- Text classification (BERT fine-tuning): ~$10-15 per run
-- Budget: 5-10 runs/month = $15-25
-
-**Limitations:**
-- Less control than custom training loops
-- Limited hyperparameter tuning options
-
-### Clinical NLP: medspaCy + scispaCy
-
-**Why Chosen:**
-- Free and open-source
-- Built on spaCy (production-ready, fast)
-- Medical-specific features:
-  - Negation detection (e.g., "no evidence of diabetes")
-  - UMLS entity linking
-  - Section detection (History of Present Illness, Assessment, Plan)
-- Pre-trained models available
-
-**Alternatives Considered:**
-- **Amazon Comprehend Medical**: $0.01 per 100 characters, too expensive at scale
-- **Azure Health Text Analytics**: Similar pricing to AWS
-- **ClinicalBERT**: Requires fine-tuning, no out-of-box negation detection
-
-**Limitations:**
-- Requires UMLS license for entity linking (free but needs registration)
-- Pre-trained models are general (may need fine-tuning for specific specialties)
-
-## Data Flow
-
-### 1. Data Ingestion
-
+### **Stage 2: Clustering** (~2-3 min)
 ```
-Synthea CSVs → Pandas DataFrame → SQLAlchemy → Vercel Postgres
+┌─────────────────────────────────────┐
+│ 1. Load from cache: vectors.npz     │
+│ 2. Run HDBSCAN clustering            │
+│ 3. Calculate quality metrics         │
+│ 4. Cache to disk: clusters.json     │
+└─────────────────────────────────────┘
+         ↓ Checkpoint saved
 ```
 
-**Process:**
-1. Download Synthea sample data (1.2K patients, ~10K encounters)
-2. Map columns to schema (encounters → claims, conditions → diagnoses)
-3. Hash patient/provider IDs for anonymization
-4. Batch insert via SQLAlchemy (500 rows/batch)
+**Benefits:**
+- ✅ CPU-intensive work isolated
+- ✅ Can experiment with clustering parameters without re-loading vectors
+- ✅ No external connections needed
 
-### 2. Feature Engineering
-
-```sql
-SELECT
-    c.claim_id,
-    c.total_charge,
-    c.total_paid,
-    c.total_paid / NULLIF(c.total_charge, 0) AS payment_ratio,
-    COUNT(DISTINCT d.diagnosis_id) AS num_diagnoses,
-    COUNT(DISTINCT p.procedure_id) AS num_procedures
-FROM claims c
-LEFT JOIN diagnoses d ON c.claim_id = d.claim_id
-LEFT JOIN procedures p ON c.claim_id = p.claim_id
-GROUP BY c.claim_id
+### **Stage 3: LLM Labeling** (PARALLEL) (~3s with parallelization)
+```
+┌─────────────────────────────────────┐
+│ 1. Load clusters.json                │
+│ 2. PARALLEL: Label N clusters        │
+│    ├─ Thread 1 → Claude API          │
+│    ├─ Thread 2 → Claude API          │
+│    └─ Thread 3 → Claude API          │
+│ 3. Cache to disk: categories.json   │
+└─────────────────────────────────────┘
+         ↓ Checkpoint saved
 ```
 
-### 3. Model Training
+**Benefits:**
+- ✅ 3x faster with concurrent API calls (Anthropic allows concurrency)
+- ✅ Cached labels → skip on re-runs if clusters unchanged
+- ✅ Retry logic per cluster (not all-or-nothing)
 
-**Outlier Detection (Isolation Forest):**
+### **Stage 4: Database Updates** (BATCHED) (~5s)
+```
+┌─────────────────────────────────────┐
+│ 1. Fresh DB connection               │
+│ 2. Batch INSERT categories (3 rows)  │
+│ 3. Batch INSERT memberships (8k)     │
+│    └─ Use executemany() for speed    │
+│ 4. Close DB connection               │
+└─────────────────────────────────────┘
+         ↓ Checkpoint saved
+```
+
+**Benefits:**
+- ✅ 10-100x faster with batch inserts
+- ✅ Fresh connection → no timeout
+- ✅ Transactional (rollback on error)
+
+### **Stage 5: Pinecone Metadata Updates** (BATCHED) (~10s)
+```
+┌─────────────────────────────────────┐
+│ 1. Fresh Pinecone connection         │
+│ 2. Batch update 100 vectors at a time│
+│ 3. Progress tracking & resume support│
+│ 4. Close Pinecone connection         │
+└─────────────────────────────────────┘
+         ↓ Complete
+```
+
+**Benefits:**
+- ✅ Pinecone batch API more efficient
+- ✅ Progress bar for long operations
+- ✅ Can resume from checkpoint if interrupted
+
+### **Stage 6: Testing & Validation** (~5s)
+```
+┌─────────────────────────────────────┐
+│ 1. Fresh connections as needed       │
+│ 2. Run integration tests             │
+│ 3. Generate report                   │
+└─────────────────────────────────────┘
+```
+
+---
+
+## Parallel Processing Strategy
+
+### What Can Be Parallelized?
+
+#### ✅ **LLM Labeling** (High Impact)
 ```python
-from sklearn.ensemble import IsolationForest
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-model = IsolationForest(
-    n_estimators=100,
-    contamination=0.05,  # Expect 5% outliers
-    random_state=42
+def label_clusters_parallel(clusters, max_workers=3):
+    """Label clusters in parallel (respects API rate limits)"""
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(label_cluster_with_llm, cluster): cluster
+            for cluster in clusters
+        }
+
+        results = []
+        for future in as_completed(futures):
+            results.append(future.result())
+
+    return results
+```
+
+**Cost Analysis:**
+- Current: 3 sequential calls × 3s = 9s
+- Parallel: 3 concurrent calls = 3s
+- **Savings: 67% faster, same API cost**
+
+#### ✅ **Pinecone Batch Updates** (High Impact)
+```python
+def update_pinecone_batched(updates, batch_size=100):
+    """Update Pinecone in batches instead of individual calls"""
+    for i in range(0, len(updates), batch_size):
+        batch = updates[i:i+batch_size]
+        index.upsert(vectors=batch)  # Single API call for 100 updates
+
+        # Progress tracking
+        print(f"Progress: {i+len(batch)}/{len(updates)}")
+```
+
+**Cost Analysis:**
+- Current: 7,974 individual updates
+- Batched: 80 batch calls (100 per batch)
+- **Savings: 99% fewer API calls**
+
+#### ✅ **Database Batch Inserts** (High Impact)
+```python
+def insert_memberships_batched(memberships, batch_size=1000):
+    """Use executemany() for bulk inserts"""
+    with engine.begin() as conn:
+        # Single executemany() call for all rows
+        conn.execute(
+            text("""INSERT INTO claim_category_membership
+                    (claim_id, category_id, similarity_score)
+                    VALUES (:cid, :cat_id, :sim)
+                    ON CONFLICT DO NOTHING"""),
+            memberships  # List of dicts
+        )
+```
+
+**Cost Analysis:**
+- Current: 7,974 individual INSERT statements
+- Batched: 1 executemany() call
+- **Savings: 100x faster**
+
+#### ❌ **Vector Loading** (Not Parallelizable)
+- Pinecone API already optimized
+- Network-bound, not CPU-bound
+
+#### ❌ **Clustering** (Not Worth It)
+- HDBSCAN already uses multiple cores internally
+- Overhead of splitting data > benefits
+
+---
+
+## Resource Management: Sleep/Wake Strategy
+
+### Connection Pooling
+```python
+from contextlib import contextmanager
+from sqlalchemy.pool import NullPool
+
+# Create engine with connection pooling
+engine = create_engine(
+    DATABASE_URL,
+    poolclass=NullPool,  # No persistent connections
+    pool_pre_ping=True,  # Check connection before use
+    connect_args={
+        "connect_timeout": 10,
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+    }
 )
-model.fit(X_scaled)
+
+@contextmanager
+def get_db_connection():
+    """Context manager for fresh DB connections"""
+    conn = engine.connect()
+    try:
+        yield conn
+    finally:
+        conn.close()  # Always close when done
+
+# Usage
+with get_db_connection() as conn:
+    # Do work
+    pass
+# Connection automatically closed
 ```
 
-**Classification (XGBoost):**
+### Lazy Initialization
 ```python
-import xgboost as xgb
+class ResourceManager:
+    """Lazy-load and auto-close resources"""
 
-model = xgb.XGBClassifier(
-    n_estimators=100,
-    max_depth=6,
-    scale_pos_weight=class_imbalance_ratio
+    def __init__(self):
+        self._pinecone = None
+        self._db = None
+        self._anthropic = None
+
+    @property
+    def pinecone(self):
+        if self._pinecone is None:
+            self._pinecone = init_pinecone(...)
+        return self._pinecone
+
+    def close_all(self):
+        """Close all open connections"""
+        if self._db:
+            self._db.close()
+        self._pinecone = None
+```
+
+---
+
+## Async/Webhook Notification System
+
+### Option 1: Database-Based Job Queue (Simplest)
+```python
+# Job tracking table
+CREATE TABLE processing_jobs (
+    job_id SERIAL PRIMARY KEY,
+    stage VARCHAR(50),
+    status VARCHAR(20),  -- pending, running, completed, failed
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    result_json TEXT,
+    error_message TEXT
+);
+
+# Job processor
+def process_stage(stage_name, stage_func):
+    """Run stage and track in database"""
+    job_id = create_job(stage_name)
+
+    try:
+        update_job(job_id, status='running')
+        result = stage_func()
+        update_job(job_id, status='completed', result=result)
+
+        # Trigger next stage (or webhook notification)
+        trigger_next_stage(stage_name)
+
+    except Exception as e:
+        update_job(job_id, status='failed', error=str(e))
+        send_alert(f"Stage {stage_name} failed: {e}")
+```
+
+**Benefits:**
+- ✅ Resume from last successful stage
+- ✅ Monitor progress via database queries
+- ✅ No external dependencies (Redis, Celery, etc.)
+
+### Option 2: Webhook Notifications (Production)
+```python
+import requests
+
+def send_webhook(event, data):
+    """Send webhook on stage completion"""
+    webhook_url = os.getenv('WEBHOOK_URL')
+    if webhook_url:
+        requests.post(webhook_url, json={
+            'event': event,
+            'timestamp': datetime.now().isoformat(),
+            'data': data
+        })
+
+# Usage
+def run_stage_2_clustering():
+    result = perform_clustering()
+    save_checkpoint('clusters.json', result)
+    send_webhook('clustering_complete', {
+        'n_clusters': result['n_clusters'],
+        'next_stage': 'llm_labeling'
+    })
+```
+
+**Integration with External Systems:**
+- Slack notifications
+- Email alerts
+- Trigger downstream pipelines
+- Dashboard updates
+
+---
+
+## Checkpointing & Resume System
+
+### Checkpoint Manager
+```python
+import json
+import hashlib
+from pathlib import Path
+
+class CheckpointManager:
+    """Manage checkpoints for resumable processing"""
+
+    def __init__(self, cache_dir='.cache'):
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(exist_ok=True)
+
+    def save(self, stage_name, data, metadata=None):
+        """Save checkpoint with versioning"""
+        checkpoint = {
+            'stage': stage_name,
+            'timestamp': datetime.now().isoformat(),
+            'data': data,
+            'metadata': metadata or {},
+            'hash': self._compute_hash(data)
+        }
+
+        path = self.cache_dir / f"{stage_name}.json"
+        with open(path, 'w') as f:
+            json.dump(checkpoint, f)
+
+        print(f"✅ Checkpoint saved: {stage_name}")
+
+    def load(self, stage_name):
+        """Load checkpoint if exists"""
+        path = self.cache_dir / f"{stage_name}.json"
+        if path.exists():
+            with open(path) as f:
+                return json.load(f)
+        return None
+
+    def has_valid_checkpoint(self, stage_name, max_age_hours=24):
+        """Check if valid checkpoint exists"""
+        checkpoint = self.load(stage_name)
+        if not checkpoint:
+            return False
+
+        timestamp = datetime.fromisoformat(checkpoint['timestamp'])
+        age = datetime.now() - timestamp
+
+        return age.total_seconds() < (max_age_hours * 3600)
+
+# Usage
+cp = CheckpointManager()
+
+# Try to resume from checkpoint
+if cp.has_valid_checkpoint('stage_2_clustering'):
+    print("📦 Resuming from checkpoint...")
+    clusters = cp.load('stage_2_clustering')['data']
+else:
+    print("🔄 Running clustering...")
+    clusters = run_clustering()
+    cp.save('stage_2_clustering', clusters, {'n_clusters': len(clusters)})
+```
+
+---
+
+## Cost Optimization Strategy
+
+### 1. **Incremental Processing**
+```python
+def get_new_vectors_since_last_run():
+    """Only process new vectors, not entire dataset"""
+    last_run = get_last_clustering_timestamp()
+
+    # Query Pinecone for vectors added after last_run
+    # (requires metadata field: created_at)
+    new_vectors = index.query(
+        filter={'created_at': {'$gte': last_run}},
+        include_values=True
+    )
+
+    return new_vectors
+```
+
+**Savings:**
+- Initial run: Process 10,000 vectors
+- Incremental: Process only 100 new vectors (99% fewer)
+
+### 2. **LLM Caching**
+```python
+def label_cluster_with_cache(sample_notes, cluster_idx):
+    """Cache LLM responses to avoid re-labeling"""
+    cache_key = hashlib.md5(''.join(sample_notes).encode()).hexdigest()
+
+    # Check cache
+    cached = cache.get(f"llm_label_{cache_key}")
+    if cached:
+        return cached
+
+    # Call LLM
+    result = label_cluster_with_llm(sample_notes, cluster_idx)
+
+    # Save to cache
+    cache.set(f"llm_label_{cache_key}", result, ttl=86400)
+
+    return result
+```
+
+**Savings:**
+- Re-runs: $0 (use cache)
+- Only pay for new/changed clusters
+
+### 3. **Smart Batch Sizing**
+```python
+def adaptive_batch_size(total_items, max_memory_mb=500):
+    """Calculate optimal batch size based on available memory"""
+    item_size_bytes = 1500  # Estimated size per vector
+    items_per_mb = 1024 * 1024 / item_size_bytes
+
+    optimal_size = int(max_memory_mb * items_per_mb)
+    return min(optimal_size, 1000)  # Cap at 1000 for API limits
+```
+
+---
+
+## Implementation Priority
+
+### Phase 1: Quick Wins (1-2 hours)
+1. ✅ **Fix DB connection timeout** → Use fresh connections
+2. ✅ **Batch database inserts** → 100x faster
+3. ✅ **Batch Pinecone updates** → 99% fewer API calls
+
+**Impact:** Fix timeouts, 10x faster, no architecture change
+
+### Phase 2: Parallelization (2-3 hours)
+1. ✅ **Parallel LLM labeling** → 3x faster
+2. ✅ **Progress bars** → Better UX
+3. ✅ **Error handling per-cluster** → More resilient
+
+**Impact:** 3x faster LLM stage, better reliability
+
+### Phase 3: Checkpointing (3-4 hours)
+1. ✅ **Checkpoint manager** → Resume from failures
+2. ✅ **Stage-based execution** → Independent stages
+3. ✅ **Cache vector loading** → Fast re-runs
+
+**Impact:** Resumable processing, fast iteration
+
+### Phase 4: Production Ready (1-2 days)
+1. ✅ **Job queue system** → Async processing
+2. ✅ **Webhook notifications** → Integration
+3. ✅ **Incremental updates** → Cost optimization
+4. ✅ **Monitoring & alerting** → Observability
+
+**Impact:** Production-grade system, cost efficient
+
+---
+
+## Example: Refactored Notebook Flow
+
+```python
+# ============================================================
+# STAGE-BASED PROCESSING WITH CHECKPOINTS
+# ============================================================
+
+cp = CheckpointManager(cache_dir='notebooks/.cache')
+rm = ResourceManager()  # Lazy resource initialization
+
+# STAGE 1: Load vectors
+if cp.has_valid_checkpoint('stage_1_vectors', max_age_hours=12):
+    print("📦 Loading vectors from checkpoint...")
+    vectors_data = cp.load('stage_1_vectors')
+else:
+    print("📥 Loading vectors from Pinecone...")
+    vectors_data = load_and_validate_vectors(rm.pinecone)
+    cp.save('stage_1_vectors', vectors_data)
+    rm.close('pinecone')  # Close connection
+
+# STAGE 2: Clustering
+if cp.has_valid_checkpoint('stage_2_clusters', max_age_hours=24):
+    print("📦 Loading clusters from checkpoint...")
+    clusters = cp.load('stage_2_clusters')
+else:
+    print("🔬 Clustering vectors...")
+    clusters = run_clustering(vectors_data)
+    cp.save('stage_2_clusters', clusters)
+
+# STAGE 3: LLM Labeling (PARALLEL)
+if cp.has_valid_checkpoint('stage_3_categories', max_age_hours=24):
+    print("📦 Loading categories from checkpoint...")
+    categories = cp.load('stage_3_categories')
+else:
+    print("🤖 Labeling clusters (parallel)...")
+    categories = label_clusters_parallel(
+        clusters,
+        max_workers=3,  # Anthropic allows concurrency
+        anthropic_client=rm.anthropic
+    )
+    cp.save('stage_3_categories', categories)
+
+# STAGE 4: Database Updates (BATCHED)
+print("💾 Updating database (batched)...")
+with get_db_connection() as conn:
+    # Batch insert categories (3 rows)
+    insert_categories_batch(conn, categories)
+
+    # Batch insert memberships (8k rows)
+    memberships = prepare_memberships(clusters, categories)
+    insert_memberships_batch(conn, memberships)
+
+# Connection auto-closed
+
+# STAGE 5: Pinecone Updates (BATCHED)
+print("🔄 Updating Pinecone metadata (batched)...")
+update_pinecone_metadata_batched(
+    rm.pinecone,
+    clusters,
+    categories,
+    batch_size=100,
+    show_progress=True
 )
-model.fit(X_train, y_train)
+
+# STAGE 6: Testing
+print("🧪 Running integration tests...")
+run_integration_tests(rm)
+
+print("✅ Complete! All stages finished successfully.")
 ```
 
-### 4. Embedding Generation
-
-```python
-from sentence_transformers import SentenceTransformer
-
-model = SentenceTransformer('all-MiniLM-L6-v2')
-embedding = model.encode(clinical_note_text)  # Returns 384-dim vector
-```
-
-### 5. Prediction Storage
-
-```sql
-UPDATE claims
-SET is_outlier = TRUE, outlier_score = 0.87
-WHERE claim_id = 12345;
-
-INSERT INTO predictions (claim_id, model_name, prediction_type, prediction_value)
-VALUES (12345, 'xgboost-v1.0', 'outlier', '{"probability": 0.87, "features": {...}}');
-```
-
-## Scalability Considerations
-
-### Current Scale (Prototype)
-- **Claims:** ~5,000
-- **Clinical Notes:** ~100-500
-- **Embeddings:** 500 × 384 = ~192K floats = 768 KB
-- **Database Size:** < 50 MB
-
-### Expected Production Scale
-- **Claims:** 100K - 1M
-- **Clinical Notes:** 50K - 500K
-- **Embeddings:** 500K × 384 = ~768 MB
-- **Database Size:** 5-50 GB
-
-### Scaling Strategy
-
-**When to upgrade Vercel Postgres:**
-- Free tier limit: 512 MB storage
-- Upgrade trigger: > 400 MB (80% capacity)
-- Pro tier ($20/mo): 10 GB storage, 100 hours compute
-
-**When to switch from pgvector to dedicated vector DB:**
-- > 1M embeddings
-- Query latency > 500ms for k=10 nearest neighbors
-- Alternatives: Pinecone ($70/mo), Qdrant Cloud ($25/mo)
-
-**When to move from Colab to dedicated compute:**
-- Training jobs > 12 hours
-- Need for scheduled/automated retraining
-- Alternatives: Paperspace, Lambda Labs GPU instances
-
-## Security & Compliance
-
-### Data Protection
-- **Synthetic Data Only (Phase 1)**: Synthea-generated, no HIPAA concerns
-- **Real Data (Phase 2+)**: MIMIC-IV requires:
-  - PhysioNet credentialing
-  - Data use agreement (DUA)
-  - No data export from Colab (keep in encrypted DB)
-
-### Connection Security
-- Vercel Postgres: TLS-encrypted connections (required)
-- Hugging Face: Private repositories for datasets/models
-- Colab Secrets: Encrypted credential storage
-
-### Access Control
-- Database: Single service account (principle of least privilege)
-- Hugging Face: Write token for model uploads, read token for inference
-- No production PHI in development environment
+---
 
 ## Monitoring & Observability
 
-### Metrics to Track
-1. **Model Performance**
-   - Outlier detection precision/recall
-   - XGBoost ROC-AUC
-   - Embedding similarity distributions
+### Performance Metrics
+```python
+from time import time
 
-2. **Data Quality**
-   - Claims with missing diagnoses
-   - Negative charge amounts
-   - Duplicate claim IDs
+class StageTimer:
+    """Track stage execution times"""
 
-3. **System Health**
-   - Database connection errors
-   - Colab session disconnects
-   - Model training failures
+    def __init__(self):
+        self.times = {}
 
-### Logging Strategy
-- **Structured logs in predictions table:**
-  ```json
-  {
-    "timestamp": "2025-12-11T10:30:00Z",
-    "model_version": "xgboost-v1.2",
-    "input_features": {...},
-    "prediction": 0.87,
-    "latency_ms": 45
-  }
-  ```
+    def __enter__(self, stage_name):
+        self.current_stage = stage_name
+        self.start = time()
+        return self
 
-## Cost Breakdown
+    def __exit__(self, *args):
+        elapsed = time() - self.start
+        self.times[self.current_stage] = elapsed
+        print(f"⏱️  {self.current_stage}: {elapsed:.1f}s")
 
-| Service | Tier | Monthly Cost | Notes |
-|---------|------|--------------|-------|
-| Vercel Postgres | Free → Pro | $0 → $20 | Upgrade when > 500 MB |
-| Google Colab | Pro | $9.99 | Required for GPU |
-| Hugging Face | Pro | $9.00 | Optional (better AutoTrain pricing) |
-| AutoTrain Compute | Pay-per-use | $15-25 | 5-10 training runs |
-| **Total** | | **$35-55** | Within $50 budget |
+# Usage
+timer = StageTimer()
 
-## Future Enhancements
+with timer('stage_1_loading'):
+    load_vectors()
 
-1. **Real-time Inference API** (FastAPI on Render/Fly.io, $5-10/mo)
-2. **Automated Retraining Pipeline** (GitHub Actions + scheduled Colab runs)
-3. **Dashboard for Predictions** (Streamlit on Streamlit Cloud, free tier)
-4. **Advanced NLP Models** (Fine-tune ClinicalBERT on MIMIC-IV notes)
+with timer('stage_2_clustering'):
+    run_clustering()
+
+# Report at end
+print(f"\n📊 Total time: {sum(timer.times.values()):.1f}s")
+for stage, duration in timer.times.items():
+    pct = (duration / sum(timer.times.values())) * 100
+    print(f"   {stage}: {duration:.1f}s ({pct:.1f}%)")
+```
+
+---
+
+## Summary
+
+| Improvement | Current | Optimized | Savings |
+|-------------|---------|-----------|---------|
+| **Total Runtime** | ~8-10 min | ~1-2 min | **80% faster** |
+| **DB Inserts** | 7,974 calls | 1 batch call | **100x faster** |
+| **Pinecone Updates** | 7,974 calls | 80 batch calls | **99% fewer calls** |
+| **LLM Labeling** | 9s sequential | 3s parallel | **67% faster** |
+| **Reliability** | Timeout errors | No timeouts | **100% success** |
+| **Resume Capability** | Start over | Resume from checkpoint | **Massive time savings** |
+| **Cost on Re-runs** | Full cost | Near $0 (cached) | **99% savings** |
+
+**Total Impact: 10x faster, 100x more reliable, 99% cheaper on re-runs**
