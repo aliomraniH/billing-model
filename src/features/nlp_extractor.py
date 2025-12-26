@@ -25,12 +25,23 @@ def _get_nlp():
     return _nlp
 
 def _get_embedding_model():
-    """Lazy load embedding model via HuggingFace."""
+    """Lazy load embedding model via HuggingFace with cloud caching."""
     global _embedding_model
     if _embedding_model is None:
         from sentence_transformers import SentenceTransformer
         from config.settings import embedding_config
-        _embedding_model = SentenceTransformer(embedding_config.model_name)
+
+        try:
+            # Try using cloud cache for faster loading
+            from src.data.cloud_cache import get_model_with_cache
+            _embedding_model = get_model_with_cache(
+                embedding_config.model_name,
+                lambda: SentenceTransformer(embedding_config.model_name),
+                version="v1.0"
+            )
+        except ImportError:
+            # Fallback to direct loading if cloud_cache not available
+            _embedding_model = SentenceTransformer(embedding_config.model_name)
     return _embedding_model
 
 

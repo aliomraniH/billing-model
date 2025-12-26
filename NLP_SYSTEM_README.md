@@ -65,6 +65,12 @@ HF_TOKEN=hf_...  # Optional (for private models)
 
 ### 2. Install Dependencies
 
+**Automated Setup (Recommended):**
+```bash
+python scripts/setup_nlp_system.py
+```
+
+**Manual Setup:**
 ```bash
 pip install -r requirements.txt
 
@@ -73,7 +79,25 @@ python -m spacy download en_core_web_sm
 pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_md-0.5.4.tar.gz
 ```
 
-### 3. Run Notebooks in Order
+### 3. (Optional) Enable Cloud Caching
+
+For production deployments on Vercel/Replit, enable model caching to reduce cold start times:
+
+```bash
+# Enable Vercel Blob and KV
+vercel blob create nlp-models
+vercel kv create nlp-cache
+
+# Pull environment variables
+vercel env pull
+
+# Warm cache after deployment
+python scripts/deploy_warm_cache.py
+```
+
+**See [docs/CLOUD_STORAGE.md](docs/CLOUD_STORAGE.md) for detailed cloud caching setup.**
+
+### 4. Run Notebooks in Order
 
 ```bash
 # Verify dependencies

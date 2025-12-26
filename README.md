@@ -117,9 +117,8 @@ This system automates claim categorization by:
 ### Quick Start - NLP System
 
 ```bash
-# 1. Install NLP dependencies
-pip install -r requirements.txt
-python -m spacy download en_core_web_sm
+# 1. Automated setup (installs all dependencies)
+python scripts/setup_nlp_system.py
 
 # 2. Verify setup
 python notebooks/00_verify_nlp_dependencies.py
