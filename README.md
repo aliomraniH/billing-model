@@ -116,10 +116,28 @@ This system automates claim categorization by:
 
 ### Quick Start - NLP System
 
+**For Deepnote Users (Recommended for Development):**
+
+```python
+# In a Deepnote notebook cell, run:
+%run notebooks/00_deepnote_setup.py
+```
+
+This interactive notebook guides you through:
+1. Adding environment variables in Deepnote UI (not bash commands!)
+2. Installing NLP dependencies automatically
+3. Verifying database connection
+4. Running health checks
+
+**See:** [docs/DEEPNOTE_SETUP.md](docs/DEEPNOTE_SETUP.md)
+
+---
+
+**For Local/Production Deployment:**
+
 ```bash
-# 1. Install NLP dependencies
-pip install -r requirements.txt
-python -m spacy download en_core_web_sm
+# 1. Automated setup (installs all dependencies)
+python scripts/setup_nlp_system.py
 
 # 2. Verify setup
 python notebooks/00_verify_nlp_dependencies.py

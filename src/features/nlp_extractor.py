@@ -25,12 +25,16 @@ def _get_nlp():
     return _nlp
 
 def _get_embedding_model():
-    """Lazy load embedding model via HuggingFace."""
+    """Lazy load embedding model via HuggingFace Inference API."""
     global _embedding_model
     if _embedding_model is None:
-        from sentence_transformers import SentenceTransformer
+        from src.data.hf_embeddings import get_embeddings_model
         from config.settings import embedding_config
-        _embedding_model = SentenceTransformer(embedding_config.model_name)
+
+        # Use HuggingFace Inference API instead of local model
+        # No downloads needed - everything runs in the cloud!
+        _embedding_model = get_embeddings_model(embedding_config.model_name)
+        print("✅ Using HuggingFace Inference API (no local model download)")
     return _embedding_model
 
 

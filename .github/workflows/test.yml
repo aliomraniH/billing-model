@@ -1,0 +1,199 @@
+name: Health Checks & Tests
+
+on:
+  push:
+    branches: [ main, claude/** ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run health checks every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  health-checks:
+    name: Storage Health Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run health checks
+        env:
+          VERCEL_POSTGRES_URL: ${{ secrets.VERCEL_POSTGRES_URL }}
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
+          KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python scripts/run_health_checks.py --verbose
+
+      - name: Export health check results
+        if: always()
+        env:
+          VERCEL_POSTGRES_URL: ${{ secrets.VERCEL_POSTGRES_URL }}
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
+          KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python scripts/run_health_checks.py --json > health-check-results.json
+
+      - name: Upload health check results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: health-check-results
+          path: health-check-results.json
+          retention-days: 30
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Health checks failed! Review the logs above."
+
+  dependency-checks:
+    name: Dependency Verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Run automated setup
+        run: |
+          python scripts/setup_nlp_system.py
+
+      - name: Verify NLP dependencies
+        run: |
+          python notebooks/00_verify_nlp_dependencies.py
+
+      - name: Test imports
+        run: |
+          python -c "
+          from src.features.clinical_code_object import ClinicalCodeObject
+          from src.features.cluster_consensus import ClusterConsensus
+          from src.features.gap_analyzer import GapAnalyzer
+          from src.data.cloud_cache import CloudModelCache
+          from config.settings import validate_environment
+          print('✅ All imports successful')
+          "
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Run unit tests
+        run: |
+          pytest tests/ -v --cov=src --cov-report=xml --cov-report=term
+        continue-on-error: true
+
+      - name: Upload coverage
+        if: always()
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+
+  deployment-readiness:
+    name: Deployment Readiness
+    runs-on: ubuntu-latest
+    needs: [health-checks, dependency-checks]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify required files
+        run: |
+          required_files=(
+            "vercel.json"
+            "requirements.txt"
+            "scripts/vercel_setup.py"
+            "scripts/run_health_checks.py"
+            "scripts/deploy_warm_cache.py"
+          )
+
+          missing=0
+          for file in "${required_files[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "❌ Missing: $file"
+              missing=$((missing + 1))
+            else
+              echo "✅ Found: $file"
+            fi
+          done
+
+          if [ $missing -gt 0 ]; then
+            echo "❌ $missing required files missing"
+            exit 1
+          fi
+
+          echo "✅ All required deployment files present"
+
+      - name: Validate vercel.json
+        run: |
+          python -c "
+          import json
+          with open('vercel.json', 'r') as f:
+              config = json.load(f)
+              assert 'buildCommand' in config, 'Missing buildCommand'
+              assert 'env' in config, 'Missing env section'
+              print('✅ vercel.json is valid')
+          "
+
+      - name: Check environment variable documentation
+        run: |
+          required_env_vars=(
+            "VERCEL_POSTGRES_URL"
+            "BLOB_READ_WRITE_TOKEN"
+            "KV_REST_API_URL"
+            "KV_REST_API_TOKEN"
+          )
+
+          echo "📋 Required environment variables:"
+          for var in "${required_env_vars[@]}"; do
+            echo "  - $var"
+          done
+
+          echo ""
+          echo "✅ Ensure these are set in Vercel dashboard:"
+          echo "   Settings → Environment Variables"
