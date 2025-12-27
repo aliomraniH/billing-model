@@ -8,6 +8,16 @@ Time: 5-10 minutes
 Prerequisites: Environment variables must be set in Deepnote UI first!
 """
 
+# Add project root to Python path
+import sys
+import os
+from pathlib import Path
+
+# Get project root (parent of notebooks directory)
+project_root = str(Path.cwd().parent) if Path.cwd().name == 'notebooks' else str(Path.cwd())
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 print("=" * 60)
 print("🚀 First-Time Installation")
 print("=" * 60)

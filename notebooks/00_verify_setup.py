@@ -7,6 +7,16 @@ This is a TEST script, separate from installation.
 Time: ~1 minute
 """
 
+# Add project root to Python path
+import sys
+import os
+from pathlib import Path
+
+# Get project root (parent of notebooks directory)
+project_root = str(Path.cwd().parent) if Path.cwd().name == 'notebooks' else str(Path.cwd())
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 print("=" * 60)
 print("🔍 Setup Verification")
 print("=" * 60)
@@ -15,7 +25,6 @@ print("=" * 60)
 # ## Step 1: Check Environment Variables
 
 # %%
-import os
 
 print("\n📋 Environment Variables:")
 print("-" * 60)
@@ -187,9 +196,20 @@ try:
     elif response.status_code == 503:
         print("  ⚠️  Model loading (this is normal on first use)")
         print("     Model will be ready in 20-30 seconds")
+    elif response.status_code == 410:
+        print(f"  ⚠️  Model endpoint deprecated/unavailable (410)")
+        print("     Testing fallback model...")
+        # Try a known working model
+        fallback_url = "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2"
+        fallback_response = requests.post(fallback_url, headers=headers, json={"inputs": test_text}, timeout=30)
+        if fallback_response.status_code in [200, 503]:
+            print("  ✅ Fallback model works - will use alternative")
+        else:
+            print(f"     Fallback also failed: {fallback_response.status_code}")
     else:
         print(f"  ⚠️  API response: {response.status_code}")
-        print("     This is OK - API will work when needed")
+        if response.text:
+            print(f"     Error: {response.text[:200]}")
 
 except Exception as e:
     print(f"  ⚠️  API test: {e}")
@@ -236,8 +256,11 @@ if os.getenv("BLOB_READ_WRITE_TOKEN"):
     try:
         import requests
 
+        # Clean token (remove any quotes)
+        blob_token = os.getenv("BLOB_READ_WRITE_TOKEN").strip('"').strip("'")
+
         url = "https://blob.vercel-storage.com/test_health.txt"
-        headers = {"Authorization": f"Bearer {os.getenv('BLOB_READ_WRITE_TOKEN')}"}
+        headers = {"Authorization": f"Bearer {blob_token}"}
 
         # Test write
         response = requests.put(url, data=b"test", headers=headers, timeout=10)
@@ -265,8 +288,10 @@ if os.getenv("KV_REST_API_URL") and os.getenv("KV_REST_API_TOKEN"):
         import requests
         import time
 
-        kv_url = os.getenv("KV_REST_API_URL")
-        headers = {"Authorization": f"Bearer {os.getenv('KV_REST_API_TOKEN')}"}
+        # Clean environment variables (remove any quotes)
+        kv_url = os.getenv("KV_REST_API_URL").strip('"').strip("'")
+        kv_token = os.getenv("KV_REST_API_TOKEN").strip('"').strip("'")
+        headers = {"Authorization": f"Bearer {kv_token}"}
 
         # Test set
         test_key = f"health_check_{int(time.time())}"
