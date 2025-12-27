@@ -8,18 +8,37 @@ Time: 5-10 minutes
 Prerequisites: Environment variables must be set in Deepnote UI first!
 """
 
-# Add project root to Python path
+# Add project root to Python path (Deepnote-compatible)
 import sys
 import os
 from pathlib import Path
 
-# Get project root (parent of notebooks directory)
-project_root = str(Path.cwd().parent) if Path.cwd().name == 'notebooks' else str(Path.cwd())
-if project_root not in sys.path:
+# Find project root by looking for config/settings.py
+current_path = Path.cwd()
+project_root = None
+
+# Check if we're already in project root
+if (current_path / 'config' / 'settings.py').exists():
+    project_root = str(current_path)
+# Check if we're in notebooks subdirectory
+elif (current_path.parent / 'config' / 'settings.py').exists():
+    project_root = str(current_path.parent)
+# Search upwards
+else:
+    for parent in current_path.parents:
+        if (parent / 'config' / 'settings.py').exists():
+            project_root = str(parent)
+            break
+
+if project_root and project_root not in sys.path:
     sys.path.insert(0, project_root)
+    os.chdir(project_root)  # Also set working directory
 
 print("=" * 60)
 print("🚀 First-Time Installation")
+print("=" * 60)
+print(f"📁 Project root: {project_root if project_root else 'NOT FOUND'}")
+print(f"📁 Working directory: {os.getcwd()}")
 print("=" * 60)
 
 # %% [markdown]
