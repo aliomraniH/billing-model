@@ -16,18 +16,47 @@ from pathlib import Path
 current_path = Path.cwd()
 project_root = None
 
-# Check if we're already in project root
+# Strategy 1: Check current directory and parents
 if (current_path / 'config' / 'settings.py').exists():
     project_root = str(current_path)
-# Check if we're in notebooks subdirectory
 elif (current_path.parent / 'config' / 'settings.py').exists():
     project_root = str(current_path.parent)
-# Search upwards
 else:
     for parent in current_path.parents:
         if (parent / 'config' / 'settings.py').exists():
             project_root = str(parent)
             break
+
+# Strategy 2: Search common Deepnote/development paths
+if not project_root:
+    common_paths = [
+        Path('/home/user/billing-model'),
+        Path('/work/billing-model'),
+        Path('/datasets/billing-model'),
+        Path.home() / 'billing-model',
+    ]
+
+    for path in common_paths:
+        if path.exists() and (path / 'config' / 'settings.py').exists():
+            project_root = str(path)
+            break
+
+# Strategy 3: Find anywhere in /home (last resort)
+if not project_root:
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['find', '/home', '-name', 'billing-model', '-type', 'd'],
+            capture_output=True, text=True, timeout=5
+        )
+        for path_str in result.stdout.strip().split('\n'):
+            if path_str:
+                path = Path(path_str)
+                if path.exists() and (path / 'config' / 'settings.py').exists():
+                    project_root = str(path)
+                    break
+    except:
+        pass
 
 if project_root and project_root not in sys.path:
     sys.path.insert(0, project_root)
@@ -38,6 +67,11 @@ print("🔍 Setup Verification")
 print("=" * 60)
 print(f"📁 Project root: {project_root if project_root else 'NOT FOUND'}")
 print(f"📁 Working directory: {os.getcwd()}")
+if project_root:
+    print(f"📁 sys.path updated: ✅")
+else:
+    print(f"⚠️  Could not find billing-model project!")
+    print(f"   Current directory: {current_path}")
 print("=" * 60)
 
 # %% [markdown]
