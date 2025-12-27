@@ -25,23 +25,16 @@ def _get_nlp():
     return _nlp
 
 def _get_embedding_model():
-    """Lazy load embedding model via HuggingFace with cloud caching."""
+    """Lazy load embedding model via HuggingFace Inference API."""
     global _embedding_model
     if _embedding_model is None:
-        from sentence_transformers import SentenceTransformer
+        from src.data.hf_embeddings import get_embeddings_model
         from config.settings import embedding_config
 
-        try:
-            # Try using cloud cache for faster loading
-            from src.data.cloud_cache import get_model_with_cache
-            _embedding_model = get_model_with_cache(
-                embedding_config.model_name,
-                lambda: SentenceTransformer(embedding_config.model_name),
-                version="v1.0"
-            )
-        except ImportError:
-            # Fallback to direct loading if cloud_cache not available
-            _embedding_model = SentenceTransformer(embedding_config.model_name)
+        # Use HuggingFace Inference API instead of local model
+        # No downloads needed - everything runs in the cloud!
+        _embedding_model = get_embeddings_model(embedding_config.model_name)
+        print("✅ Using HuggingFace Inference API (no local model download)")
     return _embedding_model
 
 

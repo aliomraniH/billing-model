@@ -205,8 +205,9 @@ nlp_packages = [
     "pip install spacy>=3.7.0",
     "pip install scispacy>=0.5.4",
     "pip install medspacy>=1.2.0",
-    "pip install sentence-transformers>=2.2.2",
-    "pip install transformers>=4.48.0",
+    # NOTE: Using HuggingFace Inference API instead of local models
+    # "pip install sentence-transformers>=2.2.2",  # Skip - use API
+    # "pip install transformers>=4.48.0",  # Skip - use API
 ]
 
 for cmd in nlp_packages:
@@ -284,16 +285,16 @@ except:
     print("  ❌ medspacy")
 
 try:
-    from sentence_transformers import SentenceTransformer
-    print("  ✅ sentence-transformers")
-except:
-    print("  ❌ sentence-transformers")
-
-try:
     import pgvector
     print("  ✅ pgvector")
 except:
     print("  ❌ pgvector")
+
+try:
+    import requests
+    print("  ✅ requests (for HuggingFace API)")
+except:
+    print("  ❌ requests")
 
 print("\nTesting spaCy models...")
 try:
@@ -321,7 +322,7 @@ try:
     db_url = os.getenv("VERCEL_POSTGRES_URL")
     engine = create_engine(db_url, connect_args={'connect_timeout': 10})
 
-    with engine.connect() as conn:
+    with engine.begin() as conn:  # Use begin() for auto-commit
         result = conn.execute(text("SELECT version()"))
         version = result.fetchone()[0]
         print(f"\n✅ Connected to PostgreSQL")
@@ -329,7 +330,6 @@ try:
 
         # Enable pgvector
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        conn.commit()
         print("✅ pgvector extension enabled")
 
         print("\n✅ Database connection successful!")

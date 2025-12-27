@@ -159,7 +159,7 @@ def build_knowledge_base(database_url: str = None, batch_size: int = 100):
         batch_size: Embedding batch size
     """
     from config.settings import db_config, embedding_config
-    from sentence_transformers import SentenceTransformer
+    from src.data.hf_embeddings import get_embeddings_model
 
     url = database_url or db_config.url
     engine = create_engine(url)
@@ -169,7 +169,7 @@ def build_knowledge_base(database_url: str = None, batch_size: int = 100):
 
     # 1. Create table if not exists
     print("\n📋 Step 1: Creating code_embeddings table...")
-    with engine.connect() as conn:
+    with engine.begin() as conn:  # Use begin() for auto-commit
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS code_embeddings (
@@ -186,7 +186,6 @@ def build_knowledge_base(database_url: str = None, batch_size: int = 100):
             CREATE INDEX IF NOT EXISTS idx_code_embeddings_hnsw
             ON code_embeddings USING hnsw (embedding vector_cosine_ops)
         """))
-        conn.commit()
     print("✅ Table created")
 
     # 2. Download codes
@@ -197,9 +196,10 @@ def build_knowledge_base(database_url: str = None, batch_size: int = 100):
     all_codes = pd.concat([icd10_df, hcpcs_df], ignore_index=True)
     print(f"✅ Downloaded {len(icd10_df)} ICD-10 + {len(hcpcs_df)} HCPCS = {len(all_codes)} total codes")
 
-    # 3. Generate embeddings
+    # 3. Generate embeddings via HuggingFace Inference API
     print(f"\n📋 Step 3: Generating embeddings with {embedding_config.model_name}...")
-    model = SentenceTransformer(embedding_config.model_name)
+    print("  Using HuggingFace Inference API (no local download needed)")
+    model = get_embeddings_model(embedding_config.model_name)
 
     # Embed descriptions in batches
     descriptions = all_codes['long_description'].tolist()
@@ -212,11 +212,11 @@ def build_knowledge_base(database_url: str = None, batch_size: int = 100):
         print(f"  Embedded {min(i+batch_size, len(descriptions))}/{len(descriptions)} codes")
 
     all_codes['embedding'] = embeddings
-    print(f"✅ Generated {len(embeddings)} embeddings")
+    print(f"✅ Generated {len(embeddings)} embeddings via API")
 
     # 4. Insert into database
     print("\n📋 Step 4: Inserting into Vercel Postgres...")
-    with engine.connect() as conn:
+    with engine.begin() as conn:  # Use begin() for auto-commit
         # Clear existing
         conn.execute(text("DELETE FROM code_embeddings"))
 
@@ -240,7 +240,6 @@ def build_knowledge_base(database_url: str = None, batch_size: int = 100):
                     'embedding': row['embedding'].tolist()
                 })
 
-            conn.commit()
             print(f"  Inserted {min(i+batch_size, len(all_codes))}/{len(all_codes)} codes")
 
     print("\n" + "=" * 60)
