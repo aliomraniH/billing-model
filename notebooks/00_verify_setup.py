@@ -183,8 +183,9 @@ try:
     else:
         print("  ✅ HF_TOKEN configured")
 
-    # Test API endpoint
-    api_url = "https://api-inference.huggingface.co/models/NeuML/bioclinical-modernbert-base-embeddings"
+    # Test API endpoint with current configured model
+    from config.settings import embedding_config
+    api_url = f"https://api-inference.huggingface.co/models/{embedding_config.model_name}"
     headers = {"Authorization": f"Bearer {hf_token}"} if hf_token else {}
 
     test_text = "Patient with diabetes and hypertension"
@@ -192,24 +193,19 @@ try:
 
     if response.status_code == 200:
         print("  ✅ HuggingFace API accessible")
-        print("  ✅ BioClinical BERT model available")
+        print(f"  ✅ Model available: {embedding_config.model_name}")
+        # Test embedding shape
+        result = response.json()
+        if isinstance(result, list) and len(result) > 0:
+            print(f"  ✅ Embedding dimension: {len(result)} (expected: {embedding_config.dimension})")
     elif response.status_code == 503:
         print("  ⚠️  Model loading (this is normal on first use)")
         print("     Model will be ready in 20-30 seconds")
-    elif response.status_code == 410:
-        print(f"  ⚠️  Model endpoint deprecated/unavailable (410)")
-        print("     Testing fallback model...")
-        # Try a known working model
-        fallback_url = "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2"
-        fallback_response = requests.post(fallback_url, headers=headers, json={"inputs": test_text}, timeout=30)
-        if fallback_response.status_code in [200, 503]:
-            print("  ✅ Fallback model works - will use alternative")
-        else:
-            print(f"     Fallback also failed: {fallback_response.status_code}")
     else:
         print(f"  ⚠️  API response: {response.status_code}")
         if response.text:
             print(f"     Error: {response.text[:200]}")
+        print(f"\n     See docs/TROUBLESHOOTING_HF_API.md for solutions")
 
 except Exception as e:
     print(f"  ⚠️  API test: {e}")

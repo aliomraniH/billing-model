@@ -21,9 +21,11 @@ class DatabaseConfig:
 @dataclass
 class EmbeddingConfig:
     """Embedding model configuration."""
-    model_name: str = "NeuML/bioclinical-modernbert-base-embeddings"
+    # Using PubMedBERT - clinically validated, Inference API compatible
+    # Alternative: "cambridgeltl/SapBERT-from-PubMedBERT-fulltext" for semantic search
+    model_name: str = "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract"
     dimension: int = 768
-    max_seq_length: int = 8192
+    max_seq_length: int = 512  # PubMedBERT standard
     batch_size: int = 32
 
 @dataclass
