@@ -42,7 +42,7 @@ Value: ...
 In a new Deepnote cell, run:
 
 ```python
-%run /home/user/billing-model/notebooks/00_first_time_install.py
+%run /work/notebooks/00_first_time_install.py
 ```
 
 **Expected output:**
@@ -59,7 +59,7 @@ In a new Deepnote cell, run:
 ## 3️⃣ Verify Setup (~1 minute)
 
 ```python
-%run /home/user/billing-model/notebooks/00_verify_setup.py
+%run /work/notebooks/00_verify_setup.py
 ```
 
 **Expected output:**
@@ -77,7 +77,7 @@ In a new Deepnote cell, run:
 ## 4️⃣ Build Knowledge Base (10-20 minutes, one-time)
 
 ```python
-%run /home/user/billing-model/notebooks/07_nlp_knowledge_base_setup.py
+%run /work/notebooks/07_nlp_knowledge_base_setup.py
 ```
 
 This downloads ICD-10 and HCPCS codes and generates embeddings via HuggingFace Inference API.
@@ -87,7 +87,7 @@ This downloads ICD-10 and HCPCS codes and generates embeddings via HuggingFace I
 ## 5️⃣ Extract Clinical Codes
 
 ```python
-%run /home/user/billing-model/notebooks/08_nlp_code_extraction.py
+%run /work/notebooks/08_nlp_code_extraction.py
 ```
 
 Extract billing codes from clinical notes using NLP.
@@ -97,7 +97,7 @@ Extract billing codes from clinical notes using NLP.
 ## 6️⃣ Run Gap Analysis
 
 ```python
-%run /home/user/billing-model/notebooks/09_gap_analysis_reporting.py
+%run /work/notebooks/09_gap_analysis_reporting.py
 ```
 
 Identify revenue leakage and compliance risks.
@@ -110,19 +110,23 @@ Identify revenue leakage and compliance risks.
 
 If you see `No module named 'src'` or `'config' is not a package`:
 
-1. Ensure you're using the **full path** when running notebooks:
+1. Ensure you're using the **correct path** when running notebooks:
    ```python
-   %run /home/user/billing-model/notebooks/00_verify_setup.py
+   # ✅ CORRECT - Deepnote path
+   %run /work/notebooks/00_verify_setup.py
+
+   # ❌ WRONG - Relative path won't work
+   %run notebooks/00_verify_setup.py
    ```
 
 2. The notebook automatically searches for the project in:
-   - `/home/user/billing-model`
+   - `/work` (Deepnote's primary location)
    - `/work/billing-model`
-   - `/datasets/billing-model`
+   - `/home/user/billing-model`
 
 3. Check the output shows:
    ```
-   📁 Project root: /home/user/billing-model
+   📁 Project root: /work
    📁 sys.path updated: ✅
    ```
 

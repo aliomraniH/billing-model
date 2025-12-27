@@ -31,6 +31,7 @@ else:
 # Strategy 2: Search common Deepnote/development paths
 if not project_root:
     common_paths = [
+        Path('/work'),  # Deepnote's primary location
         Path('/home/user/billing-model'),
         Path('/work/billing-model'),
         Path('/datasets/billing-model'),
