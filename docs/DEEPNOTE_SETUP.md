@@ -1,21 +1,103 @@
 # Deepnote Setup Guide
 
-Complete guide for setting up the Medical Billing NLP system in Deepnote.
+**Clean, simple setup in 3 steps:**
 
-## 🚀 Quick Start (5 Steps)
+## 🚀 Quick Start (3 Steps)
 
-### Step 1: Open Deepnote Setup Notebook
+### Step 1: Add Environment Variables
 
-In Deepnote, open and run:
+**Click ⚙️ (gear icon) → Environment variables → + Add**
+
+Add these 5 variables (see where to get them below):
+
+1. ✅ **VERCEL_POSTGRES_URL** (you have this)
+2. ✅ **HF_TOKEN** (you have this)
+3. 📦 **BLOB_READ_WRITE_TOKEN** (get from Vercel)
+4. 📦 **KV_REST_API_URL** (get from Vercel)
+5. 📦 **KV_REST_API_TOKEN** (get from Vercel)
+
+**See complete guide:** [docs/ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md)
+
+**After adding variables:** Restart machine (... menu → Restart machine)
+
+---
+
+### Step 2: Run Installation
+
+```python
+%run notebooks/00_first_time_install.py
 ```
-notebooks/00_deepnote_setup.py
+
+This installs:
+- ✅ Core dependencies (5-10 minutes)
+- ✅ NLP packages (medspaCy, scispaCy)
+- ✅ spaCy models
+- ✅ Embedding models
+- ✅ Database setup
+
+---
+
+### Step 3: Verify Setup
+
+```python
+%run notebooks/00_verify_setup.py
 ```
 
-This notebook will guide you through the complete setup process.
+This tests:
+- ✅ All packages installed
+- ✅ Database connection
+- ✅ spaCy models loaded
+- ✅ Cloud storage (if configured)
 
-### Step 2: Add Environment Variables in Deepnote UI
+---
 
-**DO NOT run bash commands in Python cells!** Use the Deepnote UI instead:
+## ✅ Done!
+
+You're ready to use the system:
+
+```python
+# Build knowledge base (one-time)
+%run notebooks/07_nlp_knowledge_base_setup.py
+
+# Extract codes
+%run notebooks/08_nlp_code_extraction.py
+
+# Gap analysis
+%run notebooks/09_gap_analysis_reporting.py
+```
+
+---
+
+## 🔧 Getting Vercel Tokens (Steps 3-5)
+
+**On your LOCAL machine** (not Deepnote):
+
+```bash
+# Install Vercel CLI
+npm install -g vercel
+vercel login
+vercel link
+
+# Create Blob storage
+vercel blob create nlp-models
+
+# Create KV cache
+vercel kv create nlp-cache
+
+# Get all tokens
+vercel env pull
+cat .env.local
+```
+
+**Copy the tokens** to Deepnote environment variables.
+
+**Detailed guide:** [docs/ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md)
+
+---
+
+## ⚠️ Skip Vercel Tokens for Now?
+
+You can skip BLOB/KV tokens if you want to start quickly:
 
 1. **Click the gear icon** (⚙️) in the left sidebar
 2. **Select "Environment variables"**
